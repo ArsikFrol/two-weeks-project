@@ -1,16 +1,16 @@
 'use client'
 
-import { Dispatch, SetStateAction, useState } from "react"
+import { Dispatch, SetStateAction, useCallback, useState } from "react"
 
-import { cn } from "@/lib/utils"
 import { Filter } from "../Form"
+import { Elem } from "./Elem"
 
 type Props = {
     filter: Filter,
     setFilter: Dispatch<SetStateAction<Filter>>
 }
 
-type Meeting = {
+export type Meeting = {
     id: number,
     type: string,
     name: string,
@@ -45,27 +45,18 @@ export type TypeMeeting = (typeof meetingTypes)[number]['type'] | ''
 export function TypeMeeting({ filter, setFilter }: Props) {
     const [activeMeeting, setActiveMeeting] = useState<TypeMeeting>('')
 
-    const clickMeeting = (type: TypeMeeting) => setActiveMeeting(type)
+    const clickMeeting = useCallback((type: TypeMeeting) => {
+        setActiveMeeting(type)
+        setFilter({ ...filter, typeMeeting: type })
+    }, [])
 
     return (
         <div className="mt-[20px]">
-            <div className="text-[20px] mb-[5px]">Выбиерите категорию встречи</div>
+            <div className="text-[20px] mb-[10px]">Выбиерите категорию встречи</div>
             <div className="flex flex-wrap gap-x-[20px] gap-y-[10px]">
                 {
-                    meetingTypes.map((obj, i) => {
-                        return (
-                            <div key={i} className={cn(
-                                'py-[10px] px-[20px] rounded-2xl text-[18px]',
-                                'hover:scale-101 transition-transform duration-300 cursor-pointer'
-                            )} style={{
-                                background: obj.bgColor,
-                                color: obj.colorText
-                            }}
-                                onClick={() => clickMeeting(obj.type)}>
-                                {obj.name}
-                            </div>
-                        )
-                    })
+                    meetingTypes
+                        .map((obj, i) => <Elem key={i} obj={obj} clickMeeting={clickMeeting} activeMeeting={activeMeeting} />)
                 }
             </div>
         </div>
