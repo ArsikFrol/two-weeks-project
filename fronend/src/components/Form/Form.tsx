@@ -10,7 +10,7 @@ import { Countries } from "./Сountries/Сountries"
 import { TypeMeeting } from "./TypeMeeting/TypeMeeting"
 import { placeFormSchema, PlaceFormSchema } from "@/lib/schemas"
 import { MeetingBeWith, TypeMeetingHuman } from './MeetingBeWith/MeetingBeWith';
-import { cn } from '@/lib/utils';
+import { cn } from '../../lib/utils';
 
 export type Filter = {
     countryId: string,
