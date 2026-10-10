@@ -33,8 +33,6 @@ class Country(Base):
 
 
 class City(Base):
-    """Город. id — код вида 'ru-mow'. count_places — строка, потому что
-    по контракту с фронтендом она может быть '50+'."""
     __tablename__ = "cities"
 
     id = Column(String, primary_key=True)        
@@ -51,8 +49,7 @@ class City(Base):
 
 
 def seed_database() -> None:
-    """Создаёт таблицы и один раз заполняет их странами и городами.
-    Если страны в базе уже есть — ничего не делает."""
+
     Base.metadata.create_all(bind=engine)  # создаёт таблицы
 
     db = SessionLocal()
@@ -126,20 +123,20 @@ class CitiesResponse(BaseModel):
 
 
 class PlaceOut(BaseModel):
-    """Одно предложенное место."""
+    """Одно предложенное место"""
     title: str
     category: str
     description: str
 
 
 class GenerateOut(BaseModel):
-    """Ответ /api/generate: 3 места + 4 темы для разговора."""
+    """Ответ /api/generate: 3 места + 4 темы для разговора"""
     places: list[PlaceOut]
     topics: list[str]
 
 
 class GenerateIn(BaseModel):
-    """Тело запроса POST /api/generate."""
+   
     companion: str                 # с кем встреча
     atmosphere: list[str] = []     # желаемая атмосфера (теги, макс 4)
     timeOfDay: str                 # "утро" / "день" / "вечер" / "ночь"
@@ -290,7 +287,7 @@ PLACES_LIBRARY = [
 
 
 def pick_places(atmosphere: list[str], city_name: str, time_of_day: str) -> list[PlaceOut]:
-    """Возвращает 3 места: сначала те, что совпадают по атмосфере."""
+    """Возвращает 3 места: сначала те, что совпадают по атмосфере"""
     wanted = set(atmosphere)
 
     matching = [p for p in PLACES_LIBRARY if wanted & set(p["tags"])]
@@ -314,7 +311,7 @@ def pick_places(atmosphere: list[str], city_name: str, time_of_day: str) -> list
 
 def make_topics(notes: str, atmosphere: list[str],
                 time_of_day: str, companion: str) -> list[str]:
-    """Собирает 4 темы для разговора из пожеланий пользователя."""
+    """Собирает 4 темы для разговора из пожеланий пользователя"""
     topics: list[str] = []
 
     # 1.1 доп инфа
@@ -367,7 +364,7 @@ def make_topics(notes: str, atmosphere: list[str],
 
 @app.get("/")
 def root():
-    """Проверка, что сервер жив."""
+    
     return {"message": "YouMi API работает. Документация: http://127.0.0.1:8000/docs"}
 
 
@@ -375,9 +372,7 @@ def root():
 def get_countries(search: Optional[str] = None, db: Session = Depends(get_db)):
     """Список стран. Необязательный ?search= — поиск по названию.
 
-    Поиск делаем на Python, а не средствами SQLite: SQLite не умеет
-    понижать регистр русских букв, а Python — умеет.
-    """
+    
     countries = db.query(Country).all()
 
     if search:
@@ -390,9 +385,7 @@ def get_countries(search: Optional[str] = None, db: Session = Depends(get_db)):
 @app.get("/api/cities", response_model=CitiesResponse)
 def get_cities(countryId: Optional[str] = None, search: Optional[str] = None,
                db: Session = Depends(get_db)):
-    """Список городов. ?countryId= — города одной страны,
-    ?search= — регистронезависимый поиск по названию города.
-    Параметры можно использовать вместе или по отдельности."""
+    
     query = db.query(City)
     if countryId:
         query = query.filter(City.country_id == countryId)
@@ -409,7 +402,7 @@ def get_cities(countryId: Optional[str] = None, search: Optional[str] = None,
 
 @app.post("/api/generate", response_model=GenerateOut)
 def generate(data: GenerateIn):
-    """Подбирает 3 места и 4 темы для разговора по параметрам встречи."""
+    
     places = pick_places(data.atmosphere, data.cityName, data.timeOfDay)
     topics = make_topics(data.customNotes, data.atmosphere,
                          data.timeOfDay, data.companion)
