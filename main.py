@@ -130,7 +130,7 @@ class PlaceOut(BaseModel):
 
 
 class GenerateOut(BaseModel):
-    """Ответ /api/generate: 3 места + 4 темы для разговора"""
+    # Ответ /api/generate: 3 места + 4 темы для разговора
     places: list[PlaceOut]
     topics: list[str]
 
@@ -188,7 +188,6 @@ def get_db():
 
 
 # 6 ГЕНЕРАТОР МЕСТ И ТЕМ тут пока что будет заглушка, как выберем ии, получим ключ - будет ии (платный так же как и м)
-
 # время суток
 TIME_WORDS = {
     "утро": "утром",
@@ -287,7 +286,7 @@ PLACES_LIBRARY = [
 
 
 def pick_places(atmosphere: list[str], city_name: str, time_of_day: str) -> list[PlaceOut]:
-    """Возвращает 3 места: сначала те, что совпадают по атмосфере"""
+    #Возвращает 3 места: те что совпадают по атмосфере
     wanted = set(atmosphere)
 
     matching = [p for p in PLACES_LIBRARY if wanted & set(p["tags"])]
@@ -311,7 +310,7 @@ def pick_places(atmosphere: list[str], city_name: str, time_of_day: str) -> list
 
 def make_topics(notes: str, atmosphere: list[str],
                 time_of_day: str, companion: str) -> list[str]:
-    """Собирает 4 темы для разговора из пожеланий пользователя"""
+    #Собирает 4 темы для разговора из пожеланий 
     topics: list[str] = []
 
     # 1.1 доп инфа
@@ -370,7 +369,7 @@ def root():
 
 @app.get("/api/countries", response_model=CountriesResponse)
 def get_countries(search: Optional[str] = None, db: Session = Depends(get_db)):
-    """Список стран. Необязательный ?search= — поиск по названию.
+    
 
     
     countries = db.query(Country).all()
