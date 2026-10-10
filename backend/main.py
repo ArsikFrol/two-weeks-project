@@ -34,7 +34,7 @@ class Country(Base):
 
 class City(Base):
     """Город. id — код вида 'ru-mow'. count_places — строка, потому что
-    по контракту с фронтендом она может быть '50+'.""
+    по контракту с фронтендом она может быть '50+'."""
     __tablename__ = "cities"
 
     id = Column(String, primary_key=True)        
