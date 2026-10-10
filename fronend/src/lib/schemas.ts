@@ -1,5 +1,16 @@
 import z from "zod";
 
+export const emailSchema = z.object({
+    email: z.string()
+        .trim()
+        .toLowerCase()
+        .min(5, 'Email слишком короткий')
+        .max(254, 'Email слишком длинный')
+        .email('Введите корректный email'),
+})
+
+export type EmailForm = z.infer<typeof emailSchema>
+
 export const placeFormSchema = z.object({
     FIRSTNAME: z.string()
         .trim()
@@ -39,7 +50,7 @@ export const placeFormSchema = z.object({
         .regex(
             /^[А-ЯЁа-яёA-Za-z]+([ -][А-ЯЁа-яёA-Za-z]+)*$/,
             'Название может содержать только буквы, пробел и дефис'
-        )
+        ),
 })
 
 export type PlaceFormSchema = z.infer<typeof placeFormSchema>
