@@ -7,60 +7,44 @@ from pydantic import BaseModel
 from sqlalchemy import Column, ForeignKey, Integer, String, create_engine
 from sqlalchemy.orm import Session, declarative_base, relationship, sessionmaker
 
-# 1 БАЗАДАННЫХ (SQLite)
-
+# 1. БАЗА ДАННЫХ
 DATABASE_URL = "sqlite:///./places.db"
-
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
-
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
 Base = declarative_base()
 
 
-# 2 описание таблиц бд
-
-
+# 2. МОДЕЛИ БАЗЫ ДАННЫХ
 class Country(Base):
-    """Страна. id — короткий код: 'ru', 'kz', 'uz', 'by'."""
     __tablename__ = "countries"
 
-    id = Column(String, primary_key=True)        
-    name = Column(String, nullable=False)        # "Россия"
-    count_places = Column(Integer, default=0)    # всего мест в стране (число)
+    id = Column(String, primary_key=True)
+    name = Column(String, nullable=False)
+    count_places = Column(Integer, default=0)
 
     cities = relationship("City", back_populates="country")
 
 
 class City(Base):
-    """Город. id — код вида 'ru-mow'. count_places — строка, потому что
-    по контракту с фронтендом она может быть '50+'."""
     __tablename__ = "cities"
 
-    id = Column(String, primary_key=True)        
-    name = Column(String, nullable=False)        # "Москва"
-    count_places = Column(String, default="0")   
+    id = Column(String, primary_key=True)
+    name = Column(String, nullable=False)
+    count_places = Column(String, default="0")
     country_id = Column(String, ForeignKey("countries.id"), nullable=False)
 
-    
     country = relationship("Country", back_populates="cities")
 
 
-
-# 3 НАЧАЛЬНОЕ ЗАПОЛНЕНИЕ БАЗЫ (SEED)
-
-
+# 3. ИНИЦИАЛИЗАЦИЯ БАЗЫ
 def seed_database() -> None:
-    """Создаёт таблицы и один раз заполняет их странами и городами.
-    Если страны в базе уже есть — ничего не делает."""
-    Base.metadata.create_all(bind=engine)  # создаёт таблицы
+    Base.metadata.create_all(bind=engine)
 
     db = SessionLocal()
     try:
-        if db.query(Country).first() is not None:  
+        if db.query(Country).first() is not None:
             return
 
-        # [(код города, название, мест), ...]
         data = [
             ("ru", "Россия", 115, [
                 ("ru-mow", "Москва", "50+"),
@@ -90,21 +74,17 @@ def seed_database() -> None:
         for country_id, country_name, total, cities in data:
             db.add(Country(id=country_id, name=country_name, count_places=total))
             for city_id, city_name, places in cities:
-                db.add(City(id=city_id, name=city_name,
-                            count_places=places, country_id=country_id))
+                db.add(City(id=city_id, name=city_name, count_places=places, country_id=country_id))
 
         db.commit()
-        print("База данных places.db создана и заполнена тестовыми данными.")
     finally:
         db.close()
 
 
-seed_database()  
+seed_database()
 
 
-# 4 PYDANTIC-СХЕМЫ (формат запросов и ответов API)
-#    поля одинаковые с JSON
-
+# 4. PYDANTIC СХЕМЫ
 class CountryOut(BaseModel):
     countryId: str
     name: str
@@ -126,26 +106,23 @@ class CitiesResponse(BaseModel):
 
 
 class PlaceOut(BaseModel):
-    """Одно предложенное место."""
     title: str
     category: str
     description: str
 
 
 class GenerateOut(BaseModel):
-    """Ответ /api/generate: 3 места + 4 темы для разговора."""
     places: list[PlaceOut]
     topics: list[str]
 
 
 class GenerateIn(BaseModel):
-    """Тело запроса POST /api/generate."""
-    companion: str                 # с кем встреча
-    atmosphere: list[str] = []     # желаемая атмосфера (теги, макс 4)
-    timeOfDay: str                 # "утро" / "день" / "вечер" / "ночь"
-    countryName: str               # Россия
-    cityName: str                  # Екатеринбург
-    customNotes: str = ""          # доп инфа
+    companion: str
+    atmosphere: list[str] = []
+    timeOfDay: str
+    countryName: str
+    cityName: str
+    customNotes: str = ""
 
 
 def to_country_out(country: Country) -> CountryOut:
@@ -164,25 +141,21 @@ def to_city_out(city: City) -> CityOut:
     )
 
 
-# 5 ПРИЛОЖЕНИЕ FASTAPI и CORS
-
+# 5. FASTAPI ПРИЛОЖЕНИЕ
 app = FastAPI(
     title="YouMi API",
-    description="Генератор мест и тем для встреч",
     version="1.0.0",
 )
 
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # зап с люб источника
-    allow_methods=["*"],   # HTTP-методы
+    allow_origins=["*"],
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
 def get_db():
-    """Даёт эндпоинту сессию базы и закрывает её после ответа."""
     db = SessionLocal()
     try:
         yield db
@@ -190,9 +163,7 @@ def get_db():
         db.close()
 
 
-# 6 ГЕНЕРАТОР МЕСТ И ТЕМ тут пока что будет заглушка, как выберем ии, получим ключ - будет ии (платный так же как и м)
-
-# время суток
+# 6. ЛОГИКА ГЕНЕРАЦИИ
 TIME_WORDS = {
     "утро": "утром",
     "день": "днём",
@@ -200,103 +171,87 @@ TIME_WORDS = {
     "ночь": "ночью",
 }
 
-
 PLACES_LIBRARY = [
     {
         "title": "Кофейня с десертами",
         "category": "кафе",
         "tags": ["уютная", "спокойная", "романтическая", "нейтральная"],
-        "description": "Уютная кофейня (город {city}): {time} здесь тихо, "
-                       "можно долго разговаривать за чашкой кофе и десертом.",
+        "description": "Уютная кофейня (город {city}): {time} здесь тихо, можно долго разговаривать за чашкой кофе и десертом.",
     },
     {
         "title": "Городской парк",
         "category": "парк",
         "tags": ["спокойная", "романтическая", "активная", "неформальная", "нейтральная"],
-        "description": "Прогулка по живописному парку (город {city}): лавочки и "
-                       "беседки отлично подходят для душевных разговоров.",
+        "description": "Прогулка по живописному парку (город {city}): лавочки и беседки отлично подходят для душевных разговоров.",
     },
     {
         "title": "Попугайня",
         "category": "контактный зоопарк",
         "tags": ["веселая", "неформальная", "активная", "шумная"],
-        "description": "Попугайня (город {city}): яркие попугаи, которых можно "
-                       "кормить с рук. Море эмоций и фотографии на память.",
+        "description": "Попугайня (город {city}): яркие попугаи, которых можно кормить с рук. Море эмоций и фотографии на память.",
     },
     {
         "title": "Книжный магазин с кофейней",
         "category": "книжный магазин",
         "tags": ["уютная", "спокойная", "нейтральная", "формальная"],
-        "description": "Книжный с собственной кофейней (город {city}): побродить "
-                       "между полок, выбрать книгу друг другу и обсудить авторов.",
+        "description": "Книжный с собственной кофейней (город {city}): побродить между полок, выбрать книгу друг другу и обсудить авторов.",
     },
     {
         "title": "Квест-комната",
         "category": "квест",
         "tags": ["активная", "веселая", "шумная", "неформальная"],
-        "description": "Квест-комната (город {city}): общая загадка сплотит вас, "
-                       "а после квеста точно будет что обсудить.",
+        "description": "Квест-комната (город {city}): общая загадка сплотит вас, а после квеста точно будет что обсудить.",
     },
     {
         "title": "Боулинг-клуб",
         "category": "боулинг",
         "tags": ["шумная", "веселая", "активная", "неформальная"],
-        "description": "Боулинг-клуб (город {city}): игра, смех и лёгкое "
-                       "соревнование — {time} здесь особенно оживлённо.",
+        "description": "Боулинг-клуб (город {city}): игра, смех и лёгкое соревнование — {time} здесь особенно оживлённо.",
     },
     {
         "title": "Планетарий",
         "category": "планетарий",
         "tags": ["спокойная", "романтическая", "нейтральная"],
-        "description": "Планетарий (город {city}): купол со звёздами создаёт "
-                       "атмосферу, в которой хорошо и помолчать, и помечтать вслух.",
+        "description": "Планетарий (город {city}): купол со звёздами создаёт атмосферу, в которой хорошо и помолчать, и помечтать вслух.",
     },
     {
         "title": "Ресторан с красивым видом",
         "category": "ресторан",
         "tags": ["романтическая", "формальная", "уютная"],
-        "description": "Ресторан с панорамным видом (город {city}): {time} здесь "
-                       "располагающая к беседе атмосфера и неспешный ужин.",
+        "description": "Ресторан с панорамным видом (город {city}): {time} здесь располагающая к беседе атмосфера и неспешный ужин.",
     },
     {
         "title": "Антикафе с настольными играми",
         "category": "антикафе",
         "tags": ["неформальная", "веселая", "спокойная", "уютная"],
-        "description": "Антикафе (город {city}): настольные игры, вкусный чай и "
-                       "оплата за время, а не за еду — можно сидеть весь вечер.",
+        "description": "Антикафе (город {city}): настольные игры, вкусный чай и оплата за время — можно сидеть весь вечер.",
     },
     {
         "title": "Мастер-класс в гончарной студии",
         "category": "мастер-класс",
         "tags": ["активная", "романтическая", "веселая", "уютная"],
-        "description": "Гончарная студия (город {city}): совместный мастер-класс, "
-                       "после которого останутся кружки и тёплые воспоминания.",
+        "description": "Гончарная студия (город {city}): совместный мастер-класс, после которого останутся кружки и тёплые воспоминания.",
     },
     {
         "title": "Музей или выставка",
         "category": "музей",
         "tags": ["спокойная", "формальная", "нейтральная"],
-        "description": "Музей или интересная выставка (город {city}): общие "
-                       "впечатления — готовые темы для разговора на всю встречу.",
+        "description": "Музей или интересная выставка (город {city}): общие впечатления — готовые темы для разговора на всю встречу.",
     },
     {
         "title": "Караоке-бар",
         "category": "караоке",
         "tags": ["шумная", "веселая", "неформальная"],
-        "description": "Караоке-бар (город {city}): петь дуэтом — верный способ "
-                       "весело провести время и сблизиться.",
+        "description": "Караоке-бар (город {city}): петь дуэтом — верный способ весело провести время и сблизиться.",
     },
 ]
 
 
 def pick_places(atmosphere: list[str], city_name: str, time_of_day: str) -> list[PlaceOut]:
-    """Возвращает 3 места: сначала те, что совпадают по атмосфере."""
     wanted = set(atmosphere)
-
     matching = [p for p in PLACES_LIBRARY if wanted & set(p["tags"])]
     others = [p for p in PLACES_LIBRARY if not wanted & set(p["tags"])]
 
-    # в каждом запросе разный варик
     random.shuffle(matching)
     random.shuffle(others)
 
@@ -312,16 +267,12 @@ def pick_places(atmosphere: list[str], city_name: str, time_of_day: str) -> list
     ]
 
 
-def make_topics(notes: str, atmosphere: list[str],
-                time_of_day: str, companion: str) -> list[str]:
-    """Собирает 4 темы для разговора из пожеланий пользователя."""
+def make_topics(notes: str, atmosphere: list[str], time_of_day: str, companion: str) -> list[str]:
     topics: list[str] = []
 
-    # 1.1 доп инфа
     if notes:
         topics.append(f"Обсудить пожелание «{notes}»: что вам в этом нравится и почему?")
 
-    # 2.1 темы на основе атмосферы
     atmosphere_topics = {
         "романтическая": "Как вы познакомились и какой момент вспоминаете чаще всего?",
         "веселая": "Самая смешная история, которая случилась с каждым из вас",
@@ -336,9 +287,8 @@ def make_topics(notes: str, atmosphere: list[str],
     for tag in atmosphere:
         if tag in atmosphere_topics:
             topics.append(atmosphere_topics[tag])
-            break  # достаточно одной темы по атмосфере
+            break
 
-    # 3.1 одна тема на основе времени суток
     time_topics = {
         "утро": "Как проходит ваше идеальное утро?",
         "день": "Куда любите выбираться среди дня?",
@@ -348,7 +298,6 @@ def make_topics(notes: str, atmosphere: list[str],
     if time_of_day.lower() in time_topics:
         topics.append(time_topics[time_of_day.lower()])
 
-    # 4.1 рандом из универсального списка
     universal = [
         "Что нового произошло с момента вашей последней встречи?",
         f"Как должна пройти идеальная встреча с «{companion}»?",
@@ -362,66 +311,40 @@ def make_topics(notes: str, atmosphere: list[str],
     return topics[:4]
 
 
-# 7 ЭНДПОИНТЫ API
-
-
+# 7. ЭНДПОИНТЫ API
 @app.get("/")
 def root():
-    """Проверка, что сервер жив."""
-    return {"message": "YouMi API работает. Документация: http://127.0.0.1:8000/docs"}
+    return {"status": "ok", "service": "YouMi API"}
 
 
 @app.get("/api/countries", response_model=CountriesResponse)
 def get_countries(search: Optional[str] = None, db: Session = Depends(get_db)):
-    """Список стран. Необязательный ?search= — поиск по названию.
-
-    Поиск делаем на Python, а не средствами SQLite: SQLite не умеет
-    понижать регистр русских букв, а Python — умеет.
-    """
     countries = db.query(Country).all()
-
     if search:
         search_lower = search.lower()
         countries = [c for c in countries if search_lower in c.name.lower()]
-
     return {"data": [to_country_out(c) for c in countries]}
 
 
 @app.get("/api/cities", response_model=CitiesResponse)
-def get_cities(countryId: Optional[str] = None, search: Optional[str] = None,
-               db: Session = Depends(get_db)):
-    """Список городов. ?countryId= — города одной страны,
-    ?search= — регистронезависимый поиск по названию города.
-    Параметры можно использовать вместе или по отдельности."""
+def get_cities(countryId: Optional[str] = None, search: Optional[str] = None, db: Session = Depends(get_db)):
     query = db.query(City)
     if countryId:
         query = query.filter(City.country_id == countryId)
-
     cities = query.all()
-
-    
     if search:
         search_lower = search.lower()
         cities = [c for c in cities if search_lower in c.name.lower()]
-
     return {"data": [to_city_out(c) for c in cities]}
 
 
 @app.post("/api/generate", response_model=GenerateOut)
 def generate(data: GenerateIn):
-    """Подбирает 3 места и 4 темы для разговора по параметрам встречи."""
     places = pick_places(data.atmosphere, data.cityName, data.timeOfDay)
-    topics = make_topics(data.customNotes, data.atmosphere,
-                         data.timeOfDay, data.companion)
+    topics = make_topics(data.customNotes, data.atmosphere, data.timeOfDay, data.companion)
     return GenerateOut(places=places, topics=topics)
-
-
 
 
 if __name__ == "__main__":
     import uvicorn
-
-    print("Сервер YouMi запускается...")
-    print("Документация API: http://127.0.0.1:8000/docs")
-    print("Для остановки нажмите Ctrl+C")
     uvicorn.run(app, host="127.0.0.1", port=8000)
