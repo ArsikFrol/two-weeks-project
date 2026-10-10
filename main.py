@@ -179,7 +179,7 @@ app.add_middleware(
 
 
 def get_db():
-    """Даёт эндпоинту сессию базы и закрывает её после ответа."""
+    
     db = SessionLocal()
     try:
         yield db
