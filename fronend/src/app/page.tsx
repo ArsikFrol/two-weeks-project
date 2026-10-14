@@ -1,7 +1,9 @@
-import { Form } from "@/components/Form/Form";
+import { About } from "@/components/About";
 
 export default function Home() {
-  return (
-    <Form />
-  );
+    return (
+        <div className=''>
+            <About />
+        </div>
+    )
 }

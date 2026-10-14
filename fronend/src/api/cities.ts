@@ -1,22 +1,18 @@
 import { City } from "@/types/city"
 import { api } from "./client"
 
-export const getCities = async (countryId?: string, search?: string): Promise<City[]> => {
+export const getCities = async (slug: string, search?: string): Promise<City[] | null> => {
 
     const params = new URLSearchParams()
 
-    if (countryId) params.set('countryId', countryId)
-
-    const trimmed = search?.trim() ?? ''
-    if (trimmed.length >= 3) {
-        params.set('search', trimmed)
-    }
+    if (!slug) return null
+    if (slug) params.set('slug', slug)
+    if (search && search.length > 3) params.set('search', search)
 
     const qs = params.toString()
-    const url = `/cities${qs ? `?${qs}` : ''}`
+    const url = qs ? `/cities?${qs}` : '/cities'
 
+    const { data } = await api.get<{ data: City[] }>(url)
 
-    const { data } = await api.get<{ items: City[] }>(url)
-
-    return data.items
+    return data.data
 }

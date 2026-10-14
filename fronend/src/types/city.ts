@@ -1,5 +1,5 @@
 export type City = {
-    cityId: string,
     name: string,
+    slug: string
     countPlaces: string,
 }
