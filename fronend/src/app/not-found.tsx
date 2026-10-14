@@ -44,7 +44,7 @@ export default function NotFound() {
                 <button
                     type="button"
                     onClick={() => router.push('/')}
-                    className="group inline-flex cursor-pointer items-center gap-3 rounded-lg bg-[#789699] px-5 py-3 text-[17px] font-semibold text-[#252237] transition-colors duration-200 hover:bg-[#668589]"
+                    className="group inline-flex cursor-pointer items-center gap-3 rounded-lg bg-[#789699] px-5 py-3 text-[17px] font-semibold text-white transition-colors duration-200 hover:bg-[#668589]"
                 >
                     Вернуться на главную
                     <MoveRight strokeWidth={1.5} className="h-5 w-5 transition-transform duration-200 group-hover:translate-x-1" aria-hidden="true" />
