@@ -1,50 +1,104 @@
+# -*- coding: utf-8 -*-
+# ============================================================
+#  TET-a-TET — «Генератор мест и тем для встреч»
+#  Финальный бэкенд в одном файле:
+#  FastAPI + SQLAlchemy + SQLite + OpenRouter (ИИ) + Google Places
+#
+#  Как запустить:
+#    1) pip install fastapi "uvicorn[standard]" sqlalchemy requests
+#    2) python main.py
+#    3) Главная страница: http://127.0.0.1:8000/
+#       Документация API: http://127.0.0.1:8000/docs
+#
+#  Переменные окружения (все НЕобязательны — без них работает заглушка):
+#    OPENROUTER_API_KEY  — ключ с https://openrouter.ai/keys (ИИ: места + темы)
+#    GOOGLE_API_KEY      — ключ Google Places (настоящие места по городу)
+#    OPENROUTER_MODEL    — модель ИИ (по умолчанию "openrouter/free" —
+#                          бесплатный роутер OpenRouter)
+#
+#  ГЛАВНАЯ ГАРАНТИЯ: какими бы ни были ключи и сеть, POST /api/generate
+#  ВСЕГДА возвращает 200 OK с местами и темами — при любой ошибке
+#  включается встроенная заглушка PLACES_LIBRARY (см. секцию 6).
+# ============================================================
+
+import json
+import os
 import random
 from typing import Optional
 
+import requests
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from fastapi.responses import HTMLResponse
+from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 from sqlalchemy import Column, ForeignKey, Integer, String, create_engine
 from sqlalchemy.orm import Session, declarative_base, relationship, sessionmaker
 
-# 1. БАЗА ДАННЫХ
+# ============================================================
+# 1. БАЗА ДАННЫХ (SQLite — файл places.db появится рядом со скриптом)
+# ============================================================
+
 DATABASE_URL = "sqlite:///./places.db"
+
+# check_same_thread=False — особенность SQLite: FastAPI работает с базой
+# из разных потоков, без этого параметра SQLite выдаст ошибку.
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+
+# Сессия — «соединение» с базой, через которое делаются все запросы.
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+# Базовый класс, от которого наследуются модели-таблицы.
 Base = declarative_base()
 
 
-# 2. МОДЕЛИ БАЗЫ ДАННЫХ
+# ============================================================
+# 2. МОДЕЛИ (описание таблиц базы данных).
+#    Внутри базы поля в snake_case (count_places) — это внутреннее
+#    дело бэкенда. Наружу (фронтенду) отдаём camelCase через
+#    DTO-схемы из секции 4.
+# ============================================================
+
 class Country(Base):
+    """Страна. id — короткий код: 'ru', 'kz', 'uz', 'by'."""
     __tablename__ = "countries"
 
-    id = Column(String, primary_key=True)
-    name = Column(String, nullable=False)
-    count_places = Column(Integer, default=0)
+    id = Column(String, primary_key=True)        # "ru"
+    name = Column(String, nullable=False)        # "Россия"
+    count_places = Column(Integer, default=0)    # всего мест в стране (число)
 
+    # у одной страны много городов
     cities = relationship("City", back_populates="country")
 
 
 class City(Base):
+    """Город. id — код вида 'ru-mow'. count_places — строка, потому что
+    по контракту с фронтендом она может быть '50+'."""
     __tablename__ = "cities"
 
-    id = Column(String, primary_key=True)
-    name = Column(String, nullable=False)
-    count_places = Column(String, default="0")
+    id = Column(String, primary_key=True)        # "ru-mow"
+    name = Column(String, nullable=False)        # "Москва"
+    count_places = Column(String, default="0")   # строка: "50+", "20+" ...
     country_id = Column(String, ForeignKey("countries.id"), nullable=False)
 
+    # каждый город принадлежит одной стране
     country = relationship("Country", back_populates="cities")
 
 
-# 3. ИНИЦИАЛИЗАЦИЯ БАЗЫ
+# ============================================================
+# 3. НАЧАЛЬНОЕ ЗАПОЛНЕНИЕ БАЗЫ (SEED)
+# ============================================================
+
 def seed_database() -> None:
-    Base.metadata.create_all(bind=engine)
+    """Создаёт таблицы и один раз заполняет их странами и городами.
+    Если страны в базе уже есть — ничего не делает."""
+    Base.metadata.create_all(bind=engine)  # создаёт таблицы, если их ещё нет
 
     db = SessionLocal()
     try:
-        if db.query(Country).first() is not None:
+        if db.query(Country).first() is not None:  # база уже заполнена
             return
 
+        # (код страны, название, всего мест, [(код города, название, мест), ...])
         data = [
             ("ru", "Россия", 115, [
                 ("ru-mow", "Москва", "50+"),
@@ -74,57 +128,214 @@ def seed_database() -> None:
         for country_id, country_name, total, cities in data:
             db.add(Country(id=country_id, name=country_name, count_places=total))
             for city_id, city_name, places in cities:
-                db.add(City(id=city_id, name=city_name, count_places=places, country_id=country_id))
+                db.add(City(id=city_id, name=city_name,
+                            count_places=places, country_id=country_id))
 
         db.commit()
+        print("База данных places.db создана и заполнена тестовыми данными.")
     finally:
         db.close()
 
 
-seed_database()
+seed_database()  # выполняется сразу при запуске файла
 
 
-# 4. PYDANTIC СХЕМЫ
+# ============================================================
+# 4. PYDANTIC-СХЕМЫ (DTO — формат запросов и ответов API).
+#
+#    СТРОГИЕ ПРАВИЛА НЕЙМИНГА (по код-ревью):
+#      входящие запросы верхнего уровня  -> ...Request  (GenerateRequest)
+#      ответы сервера верхнего уровня    -> ...Response (CountriesResponse)
+#      вложенные объекты в ответах       -> ...Out      (CountryOut, PlaceOut)
+#      вложенные объекты в запросах      -> ...In       (пока таких нет —
+#        появятся, например, в формах регистрации)
+#
+#    Все поля DTO — в camelCase (countryId, countPlaces, timeOfDay),
+#    чтобы фронтенду на Next.js не приходилось ничего конвертировать.
+# ============================================================
+
+# --- Ответы GET-запросов (верхний уровень — ...Response) ---
+
 class CountryOut(BaseModel):
+    """Страна (вложенный объект ответа)."""
     countryId: str
     name: str
     countPlaces: int
 
 
 class CountriesResponse(BaseModel):
+    """Ответ GET /api/countries."""
     data: list[CountryOut]
 
 
 class CityOut(BaseModel):
+    """Город (вложенный объект ответа)."""
     cityId: str
     name: str
     countPlaces: str
 
 
 class CitiesResponse(BaseModel):
+    """Ответ GET /api/cities."""
     data: list[CityOut]
 
 
+# --- Генерация ---
+
 class PlaceOut(BaseModel):
+    """Одно предложенное место (вложенный объект ответа)."""
     title: str
     category: str
     description: str
 
 
-class GenerateOut(BaseModel):
+class GenerateResponse(BaseModel):
+    """Ответ POST /api/generate — ровно та структура, что согласована
+    с фронтендом: 3 места + 4 темы для разговора."""
     places: list[PlaceOut]
     topics: list[str]
 
 
-class GenerateIn(BaseModel):
-    companion: str
-    atmosphere: list[str] = []
-    timeOfDay: str
-    countryName: str
-    cityName: str
+# --- Перевод значений формы фронтенда в русские теги ---
+# Арсений присылает значения по-английски ("wife", "quiet", "presentation").
+# Бэкенд принимает оба варианта: английский переводится в русский тег,
+# а русское значение проходит как есть (его нет в словаре — вернётся само).
+ATMOSPHERE_RU = {
+    "cozy": "уютная", "comfortable": "уютная",
+    "fun": "веселая", "festive": "веселая",
+    "quiet": "спокойная", "calm": "спокойная",
+    "loud": "шумная", "noisy": "шумная",
+    "formal": "формальная",
+    "informal": "неформальная", "casual": "неформальная",
+    "neutral": "нейтральная",
+    "romantic": "романтическая",
+    "active": "активная", "energetic": "активная",
+}
+
+PERSON_RU = {
+    "girlfriend": "С девушкой", "boyfriend": "С парнем",
+    "wife": "С женой", "husband": "С мужем",
+    "friend": "С другом", "female friend": "С подругой",
+    "parents": "С родителями", "mother": "С мамой", "father": "С папой",
+    "child": "С ребёнком", "brother": "С братом", "sister": "С сестрой",
+    "colleague": "С коллегой", "boss": "С начальником",
+    "subordinate": "С подчинённым", "client": "С клиентом",
+    "business partner": "С партнёром по бизнесу",
+    "groupmate": "С одногруппником",
+}
+
+MEETING_RU = {
+    "date": "Свидание",
+    "blind date": "Свидание вслепую",
+    "friendly meeting": "Дружеская встреча",
+    "family meeting": "Семейная встреча",
+    "business meeting": "Деловая встреча",
+    "interview": "Собеседование",
+    "negotiations": "Переговоры",
+    "planning meeting": "Планёрка",
+    "tet-a-tet": "Встреча тет-а-тет",
+    "brainstorm": "Мозговой штурм",
+    "presentation": "Презентация",
+    "workshop": "Воркшоп",
+    "training": "Тренинг",
+    "conference": "Конференция",
+    "seminar": "Семинар",
+    "consultation": "Консультация",
+    "webinar": "Вебинар",
+    "alumni meeting": "Встреча выпускников",
+}
+
+
+def ru_tag(translation: dict, value) -> str:
+    """Переводит значение по словарю; неизвестное возвращает как есть."""
+    text = str(value).strip()
+    return translation.get(text.lower(), text)
+
+
+class GenerateRequest(BaseModel):
+    """Тело запроса POST /api/generate (входящий запрос верхнего уровня).
+
+    Принимает ДВА формата — каноничный и форму Арсения:
+
+      1) Каноничный (наш): companion, meetingType, atmosphere (список
+         русских тегов), timeOfDay, countryName, cityName, customNotes.
+
+      2) Формат формы фронтендера: person="wife", metting="presentation"
+         (да, с опечаткой — принимаем как есть), atmosphere="quiet"
+         (строкой), city, country, min/max (бюджет), time="22:01".
+         date, firstName, lastName пока игнорируются («на будущее»).
+
+    Поля-алиасы означают: запрос можно прислать и со старым именем
+    (cityName), и с новым (city) — Pydantic поймёт оба. Английские
+    значения автоматически переводятся в русские теги, поэтому вся
+    остальная логика (подсказки, заглушка, промпт) работает как раньше.
+    """
+    companion: str = Field(default="",
+                           validation_alias=AliasChoices("companion", "person"))
+    meetingType: str = Field(default="",
+                             validation_alias=AliasChoices("meetingType", "metting", "meeting"))
+    atmosphere: list[str] = Field(default_factory=list)
+
+    timeOfDay: str = ""
+    # Точное время с формы ("22:01"); из него вычислим timeOfDay, если его нет
+    arrivalTime: str = Field(default="",
+                             validation_alias=AliasChoices("arrivalTime", "time"))
+
+    countryName: str = Field(default="",
+                             validation_alias=AliasChoices("countryName", "country"))
+    cityName: str = Field(default="",
+                          validation_alias=AliasChoices("cityName", "city"))
     customNotes: str = ""
 
+    budgetMin: int = Field(default=0,
+                           validation_alias=AliasChoices("budgetMin", "min"))
+    budgetMax: int = Field(default=0,
+                           validation_alias=AliasChoices("budgetMax", "max"))
 
+    @field_validator("atmosphere", mode="before")
+    @classmethod
+    def atmosphere_accepts_string(cls, value):
+        """Атмосфера может прийти строкой ("quiet") или списком — принимаем оба
+        варианта и переводим английские значения в русские теги."""
+        if value is None:
+            return []
+        if isinstance(value, str):
+            value = [value]
+        return [ru_tag(ATMOSPHERE_RU, item) for item in value]
+
+    @field_validator("companion", mode="before")
+    @classmethod
+    def translate_person(cls, value):
+        return ru_tag(PERSON_RU, value) if value else ""
+
+    @field_validator("meetingType", mode="before")
+    @classmethod
+    def translate_meeting(cls, value):
+        return ru_tag(MEETING_RU, value) if value else ""
+
+    @model_validator(mode="after")
+    def derive_time_of_day(self) -> "GenerateRequest":
+        """Если timeOfDay не прислали, но есть точное время "22:01" —
+        вычисляем часть суток сами."""
+        if not self.timeOfDay and self.arrivalTime:
+            try:
+                hour = int(str(self.arrivalTime).strip().split(":")[0])
+            except ValueError:
+                return self
+            if 5 <= hour < 11:
+                self.timeOfDay = "утро"
+            elif 11 <= hour < 17:
+                self.timeOfDay = "день"
+            elif 17 <= hour < 23:
+                self.timeOfDay = "вечер"
+            else:
+                self.timeOfDay = "ночь"
+        return self
+
+
+# Вспомогательные функции: превращают объект базы в DTO для ответа.
+# Здесь и происходит превращение snake_case (база) в camelCase (API):
+# id -> countryId/cityId, count_places -> countPlaces.
 def to_country_out(country: Country) -> CountryOut:
     return CountryOut(
         countryId=country.id,
@@ -141,21 +352,28 @@ def to_city_out(city: City) -> CityOut:
     )
 
 
-# 5. FASTAPI ПРИЛОЖЕНИЕ
+# ============================================================
+# 5. ПРИЛОЖЕНИЕ FASTAPI + CORS
+# ============================================================
+
 app = FastAPI(
-    title="YouMi API",
-    version="1.0.0",
+    title="TET-a-TET API",
+    description="Генератор мест и тем для встреч",
+    version="3.2.0",
 )
 
+# CORS разрешает браузеру (фронтенду) отправлять запросы на этот сервер,
+# даже если фронтенд и бэкенд лежат на разных адресах или портах.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
+    allow_origins=["*"],   # запросы с любого источника
+    allow_methods=["*"],   # любые HTTP-методы
     allow_headers=["*"],
 )
 
 
 def get_db():
+    """Даёт эндпоинту сессию базы и закрывает её после ответа."""
     db = SessionLocal()
     try:
         yield db
@@ -163,7 +381,14 @@ def get_db():
         db.close()
 
 
-# 6. ЛОГИКА ГЕНЕРАЦИИ
+# ============================================================
+# 6. ЛОКАЛЬНАЯ ЗАГЛУШКА PLACES_LIBRARY (уровень страховки №3).
+#    Это запасной источник данных: работает БЕЗ интернета, БЕЗ ключей
+#    и БЕЗ денег. Сюда бэкенд падает при ЛЮБОЙ проблеме с внешними
+#    API — поэтому пользователь гарантированно получает результат.
+# ============================================================
+
+# Слова для подстановки времени суток в описания мест
 TIME_WORDS = {
     "утро": "утром",
     "день": "днём",
@@ -171,87 +396,144 @@ TIME_WORDS = {
     "ночь": "ночью",
 }
 
+# Библиотека мест. tags — какие варианты атмосферы подходят этому месту.
+# Город подставляется в скобках в именительном падеже: Python сам
+# не умеет склонять русские названия ("в Екатеринбурге").
 PLACES_LIBRARY = [
     {
         "title": "Кофейня с десертами",
         "category": "кафе",
         "tags": ["уютная", "спокойная", "романтическая", "нейтральная"],
-        "description": "Уютная кофейня (город {city}): {time} здесь тихо, можно долго разговаривать за чашкой кофе и десертом.",
+        "description": "Уютная кофейня (город {city}): {time} здесь тихо, "
+                       "можно долго разговаривать за чашкой кофе и десертом.",
     },
     {
         "title": "Городской парк",
         "category": "парк",
         "tags": ["спокойная", "романтическая", "активная", "неформальная", "нейтральная"],
-        "description": "Прогулка по живописному парку (город {city}): лавочки и беседки отлично подходят для душевных разговоров.",
+        "description": "Прогулка по живописному парку (город {city}): лавочки и "
+                       "беседки отлично подходят для душевных разговоров.",
     },
     {
         "title": "Попугайня",
         "category": "контактный зоопарк",
         "tags": ["веселая", "неформальная", "активная", "шумная"],
-        "description": "Попугайня (город {city}): яркие попугаи, которых можно кормить с рук. Море эмоций и фотографии на память.",
+        "description": "Попугайня (город {city}): яркие попугаи, которых можно "
+                       "кормить с рук. Море эмоций и фотографии на память.",
     },
     {
         "title": "Книжный магазин с кофейней",
         "category": "книжный магазин",
         "tags": ["уютная", "спокойная", "нейтральная", "формальная"],
-        "description": "Книжный с собственной кофейней (город {city}): побродить между полок, выбрать книгу друг другу и обсудить авторов.",
+        "description": "Книжный с собственной кофейней (город {city}): побродить "
+                       "между полок, выбрать книгу друг другу и обсудить авторов.",
     },
     {
         "title": "Квест-комната",
         "category": "квест",
         "tags": ["активная", "веселая", "шумная", "неформальная"],
-        "description": "Квест-комната (город {city}): общая загадка сплотит вас, а после квеста точно будет что обсудить.",
+        "description": "Квест-комната (город {city}): общая загадка сплотит вас, "
+                       "а после квеста точно будет что обсудить.",
     },
     {
         "title": "Боулинг-клуб",
         "category": "боулинг",
         "tags": ["шумная", "веселая", "активная", "неформальная"],
-        "description": "Боулинг-клуб (город {city}): игра, смех и лёгкое соревнование — {time} здесь особенно оживлённо.",
+        "description": "Боулинг-клуб (город {city}): игра, смех и лёгкое "
+                       "соревнование — {time} здесь особенно оживлённо.",
     },
     {
         "title": "Планетарий",
         "category": "планетарий",
         "tags": ["спокойная", "романтическая", "нейтральная"],
-        "description": "Планетарий (город {city}): купол со звёздами создаёт атмосферу, в которой хорошо и помолчать, и помечтать вслух.",
+        "description": "Планетарий (город {city}): купол со звёздами создаёт "
+                       "атмосферу, в которой хорошо и помолчать, и помечтать вслух.",
     },
     {
         "title": "Ресторан с красивым видом",
         "category": "ресторан",
         "tags": ["романтическая", "формальная", "уютная"],
-        "description": "Ресторан с панорамным видом (город {city}): {time} здесь располагающая к беседе атмосфера и неспешный ужин.",
+        "description": "Ресторан с панорамным видом (город {city}): {time} здесь "
+                       "располагающая к беседе атмосфера и неспешный ужин.",
     },
     {
         "title": "Антикафе с настольными играми",
         "category": "антикафе",
         "tags": ["неформальная", "веселая", "спокойная", "уютная"],
-        "description": "Антикафе (город {city}): настольные игры, вкусный чай и оплата за время — можно сидеть весь вечер.",
+        "description": "Антикафе (город {city}): настольные игры, вкусный чай и "
+                       "оплата за время, а не за еду — можно сидеть весь вечер.",
     },
     {
         "title": "Мастер-класс в гончарной студии",
         "category": "мастер-класс",
         "tags": ["активная", "романтическая", "веселая", "уютная"],
-        "description": "Гончарная студия (город {city}): совместный мастер-класс, после которого останутся кружки и тёплые воспоминания.",
+        "description": "Гончарная студия (город {city}): совместный мастер-класс, "
+                       "после которого останутся кружки и тёплые воспоминания.",
     },
     {
         "title": "Музей или выставка",
         "category": "музей",
         "tags": ["спокойная", "формальная", "нейтральная"],
-        "description": "Музей или интересная выставка (город {city}): общие впечатления — готовые темы для разговора на всю встречу.",
+        "description": "Музей или интересная выставка (город {city}): общие "
+                       "впечатления — готовые темы для разговора на всю встречу.",
     },
     {
         "title": "Караоке-бар",
         "category": "караоке",
         "tags": ["шумная", "веселая", "неформальная"],
-        "description": "Караоке-бар (город {city}): петь дуэтом — верный способ весело провести время и сблизиться.",
+        "description": "Караоке-бар (город {city}): петь дуэтом — верный способ "
+                       "весело провести время и сблизиться.",
     },
 ]
 
 
+# Подсказки по атмосфере для каждого формата встречи (теги из макета).
+# Если пользователь не выбрал атмосферу вручную, бэкенд сам понимает,
+# какие места подходят: "Деловая встреча" -> формальная, "Свидание" ->
+# романтическая и т.д. Работает и для заглушки, и для поиска Google.
+MEETING_TYPE_HINTS = {
+    "Свидание": ["романтическая", "уютная"],
+    "Свидание вслепую": ["романтическая", "веселая"],
+    "Встреча тет-а-тет": ["уютная", "спокойная"],
+    "Дружеская встреча": ["веселая", "неформальная"],
+    "Встреча выпускников": ["веселая", "неформальная"],
+    "Семейная встреча": ["спокойная", "уютная"],
+    "Деловая встреча": ["формальная", "нейтральная"],
+    "Собеседование": ["формальная", "нейтральная"],
+    "Переговоры": ["формальная", "нейтральная"],
+    "Рабочее совещание": ["формальная", "нейтральная"],
+    "Планёрка": ["формальная", "нейтральная"],
+    "Презентация": ["формальная", "нейтральная"],
+    "Конференция": ["формальная", "нейтральная"],
+    "Семинар": ["формальная", "нейтральная"],
+    "Консультация": ["формальная", "нейтральная"],
+    "Вебинар": ["нейтральная"],
+    "Мозговой штурм": ["активная", "веселая"],
+    "Воркшоп": ["активная", "веселая"],
+    "Тренинг": ["активная", "веселая"],
+}
+
+# Одна готовая тема разговора для самых частых форматов встречи
+MEETING_TYPE_TOPICS = {
+    "Деловая встреча": "Какие цели у встречи и какой результат нужен каждому?",
+    "Собеседование": "Почему вам интересна эта роль и эта команда?",
+    "Переговоры": "Какие условия важнее всего каждой из сторон?",
+    "Свидание": "Что вас зацепило друг в друге при знакомстве?",
+    "Дружеская встреча": "Что нового случилось с прошлой встречи?",
+    "Семейная встреча": "Новости семьи и планы на ближайшие праздники",
+    "Мозговой штурм": "Какая идея кажется самой смелой и почему бы её не попробовать?",
+}
+
+
 def pick_places(atmosphere: list[str], city_name: str, time_of_day: str) -> list[PlaceOut]:
+    """Заглушка: возвращает 3 места из библиотеки — сначала те,
+    что совпадают по атмосфере."""
     wanted = set(atmosphere)
+
     matching = [p for p in PLACES_LIBRARY if wanted & set(p["tags"])]
     others = [p for p in PLACES_LIBRARY if not wanted & set(p["tags"])]
 
+    # Перемешиваем, чтобы при каждом запросе были разные варианты
     random.shuffle(matching)
     random.shuffle(others)
 
@@ -267,12 +549,21 @@ def pick_places(atmosphere: list[str], city_name: str, time_of_day: str) -> list
     ]
 
 
-def make_topics(notes: str, atmosphere: list[str], time_of_day: str, companion: str) -> list[str]:
+def make_topics(notes: str, atmosphere: list[str],
+                time_of_day: str, companion: str,
+                meeting_type: str = "") -> list[str]:
+    """Заглушка: собирает 4 темы для разговора из пожеланий пользователя."""
     topics: list[str] = []
 
+    # 1) Самое личное — тема из заметок пользователя ("любим кофе")
     if notes:
         topics.append(f"Обсудить пожелание «{notes}»: что вам в этом нравится и почему?")
 
+    # 2) Тема по формату встречи (если для него есть готовая)
+    if meeting_type in MEETING_TYPE_TOPICS and len(topics) < 4:
+        topics.append(MEETING_TYPE_TOPICS[meeting_type])
+
+    # 3) Одна тема по выбранной атмосфере
     atmosphere_topics = {
         "романтическая": "Как вы познакомились и какой момент вспоминаете чаще всего?",
         "веселая": "Самая смешная история, которая случилась с каждым из вас",
@@ -287,8 +578,9 @@ def make_topics(notes: str, atmosphere: list[str], time_of_day: str, companion: 
     for tag in atmosphere:
         if tag in atmosphere_topics:
             topics.append(atmosphere_topics[tag])
-            break
+            break  # достаточно одной темы по атмосфере
 
+    # 4) Одна тема по времени суток
     time_topics = {
         "утро": "Как проходит ваше идеальное утро?",
         "день": "Куда любите выбираться среди дня?",
@@ -298,6 +590,7 @@ def make_topics(notes: str, atmosphere: list[str], time_of_day: str, companion: 
     if time_of_day.lower() in time_topics:
         topics.append(time_topics[time_of_day.lower()])
 
+    # 5) Добираем до четырёх из универсального списка
     universal = [
         "Что нового произошло с момента вашей последней встречи?",
         f"Как должна пройти идеальная встреча с «{companion}»?",
@@ -311,40 +604,448 @@ def make_topics(notes: str, atmosphere: list[str], time_of_day: str, companion: 
     return topics[:4]
 
 
-# 7. ЭНДПОИНТЫ API
-@app.get("/")
-def root():
-    return {"status": "ok", "service": "YouMi API"}
+# ============================================================
+# 7. ВНЕШНИЕ СЕРВИСЫ И СТРАХОВКА ОТ ПАДЕНИЙ.
+#
+#    Уровни источников мест и тем (от лучшего к запасному):
+#
+#      Уровень 1: OpenRouter (ИИ)        — нужны OPENROUTER_API_KEY и интернет
+#      Уровень 2: Google Places          — нужны GOOGLE_API_KEY и интернет
+#      Уровень 3: заглушка PLACES_LIBRARY — работает всегда
+#
+#    КАК РАБОТАЕТ СТРАХОВКА: каждая функция внешнего сервиса возвращает
+#    None вместо исключения, если ключ не задан, сеть недоступна,
+#    ключ не принят или ответ не по формату. Эндпоинт /api/generate
+#    просто переходит на следующий уровень. Ошибки 500 не бывает:
+#    пользователь всегда получает 200 OK с местами и темами.
+# ============================================================
 
+# --- OpenRouter (ИИ) ---
+
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+# Модель по умолчанию — "openrouter/free": специальный БЕСПЛАТНЫЙ роутер
+# OpenRouter, который сам выбирает любую доступную бесплатную модель,
+# поэтому его слаг не устаревает. Свою модель можно задать без правки
+# кода: создай переменную окружения OPENROUTER_MODEL (список моделей:
+# https://openrouter.ai/models)
+AI_MODEL = os.getenv("OPENROUTER_MODEL", "openrouter/free")
+
+# Запасные бесплатные модели: если основная недоступна (исчерпан дневной
+# лимит бесплатных запросов, слаг устарел и т.п.), пробуем следующую.
+# Так уровень ИИ остаётся «работающим» даже при сбоях отдельных моделей.
+AI_MODEL_FALLBACKS = [
+    "google/gemini-2.0-flash-exp:free",
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "deepseek/deepseek-chat:free",
+]
+
+# Сколько секунд ждать ответ нейросети (она может думать подолго)
+AI_TIMEOUT_SECONDS = 60
+
+
+def build_prompt(city_name: str, companion: str, meeting_type: str,
+                 atmosphere: list[str], time_of_day: str, notes: str,
+                 budget_min: int = 0, budget_max: int = 0) -> str:
+    """Собирает текст запроса к нейросети из параметров встречи."""
+    atmosphere_text = ", ".join(atmosphere) if atmosphere else "любая"
+    notes_text = notes if notes else "нет"
+    type_text = meeting_type if meeting_type else "не указан"
+    budget_text = ""
+    if budget_max > 0 and budget_min > 0:
+        budget_text = f"Бюджет на человека: от {budget_min} до {budget_max} рублей. "
+    elif budget_max > 0:
+        budget_text = f"Бюджет на человека: до {budget_max} рублей. "
+    return (
+        f'Подбери 3 конкретных реальных места в городе "{city_name}", '
+        f'куда можно пойти на встречу. С кем встреча: {companion}. '
+        f'Формат встречи: {type_text}. '
+        f'Желаемая атмосфера: {atmosphere_text}. Время суток: {time_of_day}. '
+        f'{budget_text}'
+        f'Пожелания: {notes_text}. '
+        'Для каждого места укажи категорию (кафе, парк, музей и т.п.) и напиши '
+        'короткое описание (1-2 предложения), почему оно подходит под ситуацию. '
+        'Дополнительно предложи 4 темы для разговора на этой встрече. '
+        'Ответь СТРОГО одним JSON-объектом без какого-либо другого текста, в формате: '
+        '{"places": [{"title": "название", "category": "категория", '
+        '"description": "описание"}], '
+        '"topics": ["тема 1", "тема 2", "тема 3", "тема 4"]}'
+    )
+
+
+def ask_openrouter(prompt: str) -> Optional[str]:
+    """Уровень 1: отправляет промпт в OpenRouter и возвращает текст ответа.
+    Пробует основную модель, затем запасные бесплатные из AI_MODEL_FALLBACKS.
+    Если ключа нет или все модели недоступны — None (страховка)."""
+    api_key = os.getenv("OPENROUTER_API_KEY")   # <-- ПРОВЕРКА КЛЮЧА ИИ
+    if not api_key:
+        print("OpenRouter: ключ OPENROUTER_API_KEY не задан — пропускаем уровень ИИ.")
+        return None
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        # OpenRouter просит называть проект — так он видит, откуда трафик
+        "HTTP-Referer": "http://127.0.0.1:8000",
+        "X-Title": "TET-a-TET",
+    }
+
+    for model in [AI_MODEL] + AI_MODEL_FALLBACKS:
+        body = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.8,     # 0.8 = немного творчества в ответах
+            "max_tokens": 1200,     # предел длины ответа нейросети
+        }
+        try:
+            response = requests.post(OPENROUTER_URL, headers=headers, json=body,
+                                     timeout=AI_TIMEOUT_SECONDS)
+            response.raise_for_status()  # исключение, если код ответа 4xx/5xx
+            content = response.json()["choices"][0]["message"]["content"]
+            print(f"OpenRouter: ответила модель {model}.")
+            return content
+        except (requests.RequestException, KeyError, IndexError, ValueError) as error:
+            # Сеть недоступна, ключ не принят, лимит бесплатной модели
+            # исчерпан — пробуем следующую модель, это НЕ ошибка сервера.
+            print(f"OpenRouter: модель {model} недоступна ({error}) — пробуем следующую.")
+
+    print("OpenRouter: ни одна модель не ответила — пропускаем уровень ИИ.")
+    return None
+
+
+def parse_ai_answer(text: Optional[str]) -> Optional[GenerateResponse]:
+    """Превращает текст нейросети в GenerateResponse.
+    Возвращает None, если разобрать не получилось (тогда будет заглушка)."""
+    if not text:
+        return None
+
+    # Нейросети любят добавлять текст вокруг JSON или маркировку ```json.
+    # Надёжный способ: взять кусок между первой "{" и последней "}".
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end <= start:
+        return None
+
+    try:
+        data = json.loads(text[start:end + 1])
+    except ValueError:
+        return None
+
+    try:
+        places = [
+            PlaceOut(
+                title=str(place.get("title", "Место")),
+                category=str(place.get("category", "место для встречи")),
+                description=str(place.get("description", "")),
+            )
+            for place in data["places"][:3]
+        ]
+        topics = [str(topic) for topic in data["topics"][:4]]
+    except (KeyError, TypeError, AttributeError):
+        return None
+
+    if not places or not topics:
+        return None
+
+    return GenerateResponse(places=places, topics=topics)
+
+
+# --- Google Places (настоящие места) ---
+
+# Google Places API (New): поиск по текстовой фразе
+GOOGLE_PLACES_URL = "https://places.googleapis.com/v1/places:searchText"
+
+# Сколько секунд ждать ответ Google (он отвечает быстро)
+GOOGLE_TIMEOUT_SECONDS = 10
+
+# Какие типы мест Google переводить на русский в поле category
+PLACE_TYPE_RU = {
+    "cafe": "кафе",
+    "restaurant": "ресторан",
+    "park": "парк",
+    "museum": "музей",
+    "bar": "бар",
+    "bowling_alley": "боулинг",
+    "art_gallery": "галерея",
+    "tourist_attraction": "достопримечательность",
+    "zoo": "зоопарк",
+    "movie_theater": "кинотеатр",
+}
+
+# Какое место искать в Google под каждую атмосферу
+ATMOSPHERE_TO_SEARCH = {
+    "уютная": "кафе",
+    "спокойная": "парк",
+    "романтическая": "ресторан",
+    "веселая": "антикафе",
+    "шумная": "боулинг",
+    "формальная": "ресторан",
+    "неформальная": "антикафе",
+    "нейтральная": "кафе",
+    "активная": "квест",
+}
+
+
+def get_places_from_google(city_name: str, atmosphere: list[str]) -> Optional[list[PlaceOut]]:
+    """Уровень 2: ищет настоящие места в городе через Google Places.
+    Если ключа нет или запрос не удался — возвращает None (страховка)."""
+    api_key = os.getenv("GOOGLE_API_KEY")       # <-- ПРОВЕРКА КЛЮЧА GOOGLE
+    if not api_key:
+        print("Google Places: ключ GOOGLE_API_KEY не задан — пропускаем уровень Google.")
+        return None
+
+    # Выбираем, ЧТО искать: первое совпадение атмосферы или кафе по умолчанию
+    search_word = "кафе"
+    for tag in atmosphere:
+        if tag in ATMOSPHERE_TO_SEARCH:
+            search_word = ATMOSPHERE_TO_SEARCH[tag]
+            break
+
+    headers = {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": api_key,
+        # Какие поля возвращать — за неиспрошенные поля Google берёт деньги
+        "X-Goog-FieldMask": "places.displayName,places.formattedAddress,"
+                            "places.rating,places.primaryType",
+    }
+    body = {
+        "textQuery": f"{search_word} {city_name}",
+        "languageCode": "ru",
+        "maxResultCount": 3,
+    }
+
+    try:
+        response = requests.post(GOOGLE_PLACES_URL, headers=headers, json=body,
+                                 timeout=GOOGLE_TIMEOUT_SECONDS)
+        response.raise_for_status()
+        raw_places = response.json().get("places", [])
+    except (requests.RequestException, ValueError) as error:
+        print(f"Google Places: запрос не удался ({error}) — пропускаем уровень Google.")
+        return None
+
+    if not raw_places:
+        print("Google Places: ничего не нашлось — пропускаем уровень Google.")
+        return None
+
+    # Нормализация: сырой ответ Google -> наши DTO PlaceOut
+    result = []
+    for place in raw_places[:3]:
+        name = (place.get("displayName") or {}).get("text", "Место")
+        address = place.get("formattedAddress", "")
+        rating = place.get("rating")
+        place_type = place.get("primaryType", "")
+
+        description = f"Настоящее место по данным Google Карт: {address}"
+        if rating:
+            description += f". Рейтинг {rating} из 5"
+        description += "."
+
+        result.append(PlaceOut(
+            title=name,
+            category=PLACE_TYPE_RU.get(place_type, search_word),
+            description=description,
+        ))
+
+    return result
+
+
+# ============================================================
+# 8. ГЛАВНАЯ СТРАНИЦА (HTML-визитка проекта)
+# ============================================================
+
+HOME_HTML = """<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TET-a-TET — Генератор мест и тем для встреч</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: "Segoe UI", Arial, sans-serif;
+            min-height: 100vh;
+            display: flex; align-items: center; justify-content: center;
+            padding: 24px;
+            background: linear-gradient(135deg, #0f172a 0%, #1d4ed8 55%, #0e7490 100%);
+            color: #f9fafb;
+        }
+        .card {
+            max-width: 760px; width: 100%;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            border-radius: 24px;
+            padding: 48px;
+            box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+        }
+        h1 { font-size: 42px; margin-bottom: 6px; }
+        .tagline { font-size: 18px; color: #bae6fd; margin-bottom: 20px; }
+        .description { font-size: 16px; line-height: 1.65; margin-bottom: 8px; color: #e5e7eb; }
+        h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 2px;
+             color: #7dd3fc; margin: 26px 0 12px; }
+        .chips { display: flex; flex-wrap: wrap; gap: 10px; }
+        .chip {
+            background: rgba(255, 255, 255, 0.14);
+            border: 1px solid rgba(255, 255, 255, 0.22);
+            padding: 8px 16px; border-radius: 999px; font-size: 15px;
+        }
+        .docs-button {
+            display: inline-block; margin-top: 30px;
+            background: #fbbf24; color: #0f172a;
+            font-weight: 700; text-decoration: none;
+            padding: 13px 26px; border-radius: 12px;
+        }
+        .docs-button:hover { background: #fcd34d; }
+        .hint { margin-top: 14px; font-size: 13px; color: rgba(249, 250, 251, 0.65); }
+    </style>
+</head>
+<body>
+    <main class="card">
+        <h1>Добро пожаловать в TET-a-TET! 👋</h1>
+        <p class="tagline">Генератор мест и тем для встреч</p>
+        <p class="description">
+            TET-a-TET придуман, чтобы встречи не начинались со слов
+            «ну... куда пойдём?». Расскажи, с кем идёшь, какая атмосфера нужна
+            и в какое время, — а мы умно подберём 3 подходящих места
+            в твоём городе и предложим 4 темы, о которых точно будет
+            о чём поговорить.
+        </p>
+
+        <h2>Наша команда</h2>
+        <div class="chips">
+            <span class="chip">Арсений</span>
+            <span class="chip">Ника</span>
+            <span class="chip">Кира</span>
+            <span class="chip">Настя</span>
+        </div>
+
+        <h2>Технологии</h2>
+        <div class="chips">
+            <span class="chip">Python</span>
+            <span class="chip">FastAPI</span>
+            <span class="chip">SQLAlchemy</span>
+            <span class="chip">SQLite</span>
+            <span class="chip">ИИ (OpenRouter)</span>
+            <span class="chip">Google Places</span>
+        </div>
+
+        <a class="docs-button" href="/docs">Открыть документацию API &rarr;</a>
+        <p class="hint">GET /api/countries &middot; GET /api/cities &middot; POST /api/generate</p>
+    </main>
+</body>
+</html>"""
+
+
+@app.get("/", response_class=HTMLResponse)
+def home():
+    """Главная страница — красивая HTML-визитка проекта."""
+    return HOME_HTML
+
+
+# ============================================================
+# 9. ЭНДПОИНТЫ API
+# ============================================================
 
 @app.get("/api/countries", response_model=CountriesResponse)
 def get_countries(search: Optional[str] = None, db: Session = Depends(get_db)):
+    """Список стран. Необязательный ?search= — поиск по названию.
+
+    Поиск делаем на Python, а не средствами SQLite: SQLite не умеет
+    понижать регистр русских букв, а Python — умеет.
+    """
     countries = db.query(Country).all()
+
     if search:
         search_lower = search.lower()
         countries = [c for c in countries if search_lower in c.name.lower()]
+
     return {"data": [to_country_out(c) for c in countries]}
 
 
 @app.get("/api/cities", response_model=CitiesResponse)
-def get_cities(countryId: Optional[str] = None, search: Optional[str] = None, db: Session = Depends(get_db)):
+def get_cities(countryId: Optional[str] = None, search: Optional[str] = None,
+               db: Session = Depends(get_db)):
+    """Список городов. ?countryId= — города одной страны,
+    ?search= — регистронезависимый поиск по названию города.
+    Параметры можно использовать вместе или по отдельности."""
     query = db.query(City)
+
+    # Точное совпадение кода страны — можно фильтровать прямо в SQL
     if countryId:
         query = query.filter(City.country_id == countryId)
+
     cities = query.all()
+
+    # Поиск по названию — на Python (см. комментарий в /api/countries)
     if search:
         search_lower = search.lower()
         cities = [c for c in cities if search_lower in c.name.lower()]
+
     return {"data": [to_city_out(c) for c in cities]}
 
 
-@app.post("/api/generate", response_model=GenerateOut)
-def generate(data: GenerateIn):
-    places = pick_places(data.atmosphere, data.cityName, data.timeOfDay)
-    topics = make_topics(data.customNotes, data.atmosphere, data.timeOfDay, data.companion)
-    return GenerateOut(places=places, topics=topics)
+@app.post("/api/generate", response_model=GenerateResponse)
+def generate(request: GenerateRequest):
+    """Подбирает 3 места и 4 темы для разговора. Три уровня надёжности:
+
+      Уровень 1 — OpenRouter (ИИ): места + темы одним ответом;
+      Уровень 2 — Google Places: настоящие места + локальные темы;
+      Уровень 3 — полная заглушка PLACES_LIBRARY.
+
+    Ни на одном уровне ошибка 500 не выходит наружу: при любой проблеме
+    включается следующий уровень, и пользователь всегда получает ответ.
+    """
+    # Подсказки по атмосфере из формата встречи: бэкенд сам понимает,
+    # какие места подходят ("Деловая встреча" -> формальная и т.д.)
+    hints = MEETING_TYPE_HINTS.get(request.meetingType, [])
+    effective_atmosphere = request.atmosphere + hints
+
+    # --- Уровень 1: настоящий ИИ (OpenRouter) ---
+    prompt = build_prompt(request.cityName, request.companion,
+                          request.meetingType, request.atmosphere,
+                          request.timeOfDay, request.customNotes,
+                          request.budgetMin, request.budgetMax)
+    ai_result = parse_ai_answer(ask_openrouter(prompt))
+    if ai_result is not None:
+        print("Генерация: источник — OpenRouter (ИИ).")
+        return ai_result
+
+    # --- Уровень 2: настоящие места из Google Places, темы — локальные ---
+    google_places = get_places_from_google(request.cityName, effective_atmosphere)
+    if google_places is not None:
+        print("Генерация: места — Google Places, темы — локальный генератор.")
+        return GenerateResponse(
+            places=google_places,
+            topics=make_topics(request.customNotes, request.atmosphere,
+                               request.timeOfDay, request.companion,
+                               request.meetingType),
+        )
+
+    # --- Уровень 3: полная заглушка (работает всегда) ---
+    print("Генерация: источник — локальная заглушка PLACES_LIBRARY.")
+    return GenerateResponse(
+        places=pick_places(effective_atmosphere, request.cityName, request.timeOfDay),
+        topics=make_topics(request.customNotes, request.atmosphere,
+                           request.timeOfDay, request.companion,
+                           request.meetingType),
+    )
 
 
+# ============================================================
+# 10. ЗАПУСК СЕРВЕРА: python main.py
+# ============================================================
 if __name__ == "__main__":
     import uvicorn
+
+    print("Сервер TET-a-TET запускается...")
+    print("Главная страница: http://127.0.0.1:8000/")
+    print("Документация API: http://127.0.0.1:8000/docs")
+    print("Ключи внешних сервисов (необязательны):")
+    print("  OPENROUTER_API_KEY:",
+          "задан — ИИ включён" if os.getenv("OPENROUTER_API_KEY")
+          else "не задан — ИИ отключён")
+    print("  GOOGLE_API_KEY:",
+          "задан — Google Places включён" if os.getenv("GOOGLE_API_KEY")
+          else "не задан — Google Places отключён")
+    print("Без ключей всё работает на встроенной заглушке.")
+    print("Для остановки нажмите Ctrl+C")
     uvicorn.run(app, host="127.0.0.1", port=8000)
