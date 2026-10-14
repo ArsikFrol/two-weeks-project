@@ -1,3 +1,26 @@
+# -*- coding: utf-8 -*-
+# ============================================================
+#  TET-a-TET — «Генератор мест и тем для встреч»
+#  Финальный бэкенд в одном файле:
+#  FastAPI + SQLAlchemy + SQLite + OpenRouter (ИИ) + Google Places
+#
+#  Как запустить:
+#    1) pip install fastapi "uvicorn[standard]" sqlalchemy requests
+#    2) python main.py
+#    3) Главная страница: http://127.0.0.1:8000/
+#       Документация API: http://127.0.0.1:8000/docs
+#
+#  Переменные окружения (все НЕобязательны — без них работает заглушка):
+#    OPENROUTER_API_KEY  — ключ с https://openrouter.ai/keys (ИИ: места + темы)
+#    GOOGLE_API_KEY      — ключ Google Places (настоящие места по городу)
+#    OPENROUTER_MODEL    — модель ИИ (по умолчанию "openrouter/free" —
+#                          бесплатный роутер OpenRouter)
+#
+#  ГЛАВНАЯ ГАРАНТИЯ: какими бы ни были ключи и сеть, POST /api/generate
+#  ВСЕГДА возвращает 200 OK с местами и темами — при любой ошибке
+#  включается встроенная заглушка PLACES_LIBRARY (см. секцию 6).
+# ============================================================
+
 import json
 import os
 import random
@@ -11,25 +34,39 @@ from pydantic import AliasChoices, BaseModel, Field, field_validator, model_vali
 from sqlalchemy import Column, ForeignKey, Integer, String, create_engine
 from sqlalchemy.orm import Session, declarative_base, relationship, sessionmaker
 
+# ============================================================
+# 1. БАЗА ДАННЫХ (SQLite — файл places.db появится рядом со скриптом)
+# ============================================================
 
 DATABASE_URL = "sqlite:///./places.db"
 
+# check_same_thread=False — особенность SQLite: FastAPI работает с базой
+# из разных потоков, без этого параметра SQLite выдаст ошибку.
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 
+# Сессия — «соединение» с базой, через которое делаются все запросы.
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
+# Базовый класс, от которого наследуются модели-таблицы.
 Base = declarative_base()
 
 
+# ============================================================
+# 2. МОДЕЛИ (описание таблиц базы данных).
+#    Внутри базы поля в snake_case (count_places) — это внутреннее
+#    дело бэкенда. Наружу (фронтенду) отдаём camelCase через
+#    DTO-схемы из секции 4.
+# ============================================================
 
 class Country(Base):
     """Страна. id — короткий код: 'ru', 'kz', 'uz', 'by'."""
     __tablename__ = "countries"
 
-    id = Column(String, primary_key=True)        
-    name = Column(String, nullable=False)        
-    count_places = Column(Integer, default=0)    
+    id = Column(String, primary_key=True)        # "ru"
+    name = Column(String, nullable=False)        # "Россия"
+    count_places = Column(Integer, default=0)    # всего мест в стране (число)
 
+    # у одной страны много городов
     cities = relationship("City", back_populates="country")
 
 
@@ -38,25 +75,30 @@ class City(Base):
     по контракту с фронтендом она может быть '50+'."""
     __tablename__ = "cities"
 
-    id = Column(String, primary_key=True)        
-    name = Column(String, nullable=False)        
-    count_places = Column(String, default="0")   
+    id = Column(String, primary_key=True)        # "ru-mow"
+    name = Column(String, nullable=False)        # "Москва"
+    count_places = Column(String, default="0")   # строка: "50+", "20+" ...
     country_id = Column(String, ForeignKey("countries.id"), nullable=False)
 
+    # каждый город принадлежит одной стране
     country = relationship("Country", back_populates="cities")
 
 
+# ============================================================
+# 3. НАЧАЛЬНОЕ ЗАПОЛНЕНИЕ БАЗЫ (SEED)
+# ============================================================
 
 def seed_database() -> None:
     """Создаёт таблицы и один раз заполняет их странами и городами.
     Если страны в базе уже есть — ничего не делает."""
-    Base.metadata.create_all(bind=engine)  
+    Base.metadata.create_all(bind=engine)  # создаёт таблицы, если их ещё нет
 
     db = SessionLocal()
     try:
-        if db.query(Country).first() is not None: 
+        if db.query(Country).first() is not None:  # база уже заполнена
             return
 
+        # (код страны, название, всего мест, [(код города, название, мест), ...])
         data = [
             ("ru", "Россия", 115, [
                 ("ru-mow", "Москва", "50+"),
@@ -95,9 +137,24 @@ def seed_database() -> None:
         db.close()
 
 
-seed_database()  
+seed_database()  # выполняется сразу при запуске файла
 
 
+# ============================================================
+# 4. PYDANTIC-СХЕМЫ (DTO — формат запросов и ответов API).
+#
+#    СТРОГИЕ ПРАВИЛА НЕЙМИНГА (по код-ревью):
+#      входящие запросы верхнего уровня  -> ...Request  (GenerateRequest)
+#      ответы сервера верхнего уровня    -> ...Response (CountriesResponse)
+#      вложенные объекты в ответах       -> ...Out      (CountryOut, PlaceOut)
+#      вложенные объекты в запросах      -> ...In       (пока таких нет —
+#        появятся, например, в формах регистрации)
+#
+#    Все поля DTO — в camelCase (countryId, countPlaces, timeOfDay),
+#    чтобы фронтенду на Next.js не приходилось ничего конвертировать.
+# ============================================================
+
+# --- Ответы GET-запросов (верхний уровень — ...Response) ---
 
 class CountryOut(BaseModel):
     """Страна (вложенный объект ответа)."""
@@ -123,6 +180,7 @@ class CitiesResponse(BaseModel):
     data: list[CityOut]
 
 
+# --- Генерация ---
 
 class PlaceOut(BaseModel):
     """Одно предложенное место (вложенный объект ответа)."""
@@ -138,6 +196,10 @@ class GenerateResponse(BaseModel):
     topics: list[str]
 
 
+# --- Перевод значений формы фронтенда в русские теги ---
+# Арсений присылает значения по-английски ("wife", "quiet", "presentation").
+# Бэкенд принимает оба варианта: английский переводится в русский тег,
+# а русское значение проходит как есть (его нет в словаре — вернётся само).
 ATMOSPHERE_RU = {
     "cozy": "уютная", "comfortable": "уютная",
     "fun": "веселая", "festive": "веселая",
@@ -215,6 +277,7 @@ class GenerateRequest(BaseModel):
     atmosphere: list[str] = Field(default_factory=list)
 
     timeOfDay: str = ""
+    # Точное время с формы ("22:01"); из него вычислим timeOfDay, если его нет
     arrivalTime: str = Field(default="",
                              validation_alias=AliasChoices("arrivalTime", "time"))
 
@@ -270,6 +333,9 @@ class GenerateRequest(BaseModel):
         return self
 
 
+# Вспомогательные функции: превращают объект базы в DTO для ответа.
+# Здесь и происходит превращение snake_case (база) в camelCase (API):
+# id -> countryId/cityId, count_places -> countPlaces.
 def to_country_out(country: Country) -> CountryOut:
     return CountryOut(
         countryId=country.id,
@@ -286,6 +352,9 @@ def to_city_out(city: City) -> CityOut:
     )
 
 
+# ============================================================
+# 5. ПРИЛОЖЕНИЕ FASTAPI + CORS
+# ============================================================
 
 app = FastAPI(
     title="TET-a-TET API",
@@ -293,10 +362,12 @@ app = FastAPI(
     version="3.2.0",
 )
 
+# CORS разрешает браузеру (фронтенду) отправлять запросы на этот сервер,
+# даже если фронтенд и бэкенд лежат на разных адресах или портах.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  
-    allow_methods=["*"],  
+    allow_origins=["*"],   # запросы с любого источника
+    allow_methods=["*"],   # любые HTTP-методы
     allow_headers=["*"],
 )
 
@@ -310,6 +381,14 @@ def get_db():
         db.close()
 
 
+# ============================================================
+# 6. ЛОКАЛЬНАЯ ЗАГЛУШКА PLACES_LIBRARY (уровень страховки №3).
+#    Это запасной источник данных: работает БЕЗ интернета, БЕЗ ключей
+#    и БЕЗ денег. Сюда бэкенд падает при ЛЮБОЙ проблеме с внешними
+#    API — поэтому пользователь гарантированно получает результат.
+# ============================================================
+
+# Слова для подстановки времени суток в описания мест
 TIME_WORDS = {
     "утро": "утром",
     "день": "днём",
@@ -317,6 +396,9 @@ TIME_WORDS = {
     "ночь": "ночью",
 }
 
+# Библиотека мест. tags — какие варианты атмосферы подходят этому месту.
+# Город подставляется в скобках в именительном падеже: Python сам
+# не умеет склонять русские названия ("в Екатеринбурге").
 PLACES_LIBRARY = [
     {
         "title": "Кофейня с десертами",
@@ -405,6 +487,10 @@ PLACES_LIBRARY = [
 ]
 
 
+# Подсказки по атмосфере для каждого формата встречи (теги из макета).
+# Если пользователь не выбрал атмосферу вручную, бэкенд сам понимает,
+# какие места подходят: "Деловая встреча" -> формальная, "Свидание" ->
+# романтическая и т.д. Работает и для заглушки, и для поиска Google.
 MEETING_TYPE_HINTS = {
     "Свидание": ["романтическая", "уютная"],
     "Свидание вслепую": ["романтическая", "веселая"],
@@ -427,6 +513,7 @@ MEETING_TYPE_HINTS = {
     "Тренинг": ["активная", "веселая"],
 }
 
+# Одна готовая тема разговора для самых частых форматов встречи
 MEETING_TYPE_TOPICS = {
     "Деловая встреча": "Какие цели у встречи и какой результат нужен каждому?",
     "Собеседование": "Почему вам интересна эта роль и эта команда?",
@@ -446,6 +533,7 @@ def pick_places(atmosphere: list[str], city_name: str, time_of_day: str) -> list
     matching = [p for p in PLACES_LIBRARY if wanted & set(p["tags"])]
     others = [p for p in PLACES_LIBRARY if not wanted & set(p["tags"])]
 
+    # Перемешиваем, чтобы при каждом запросе были разные варианты
     random.shuffle(matching)
     random.shuffle(others)
 
@@ -466,12 +554,16 @@ def make_topics(notes: str, atmosphere: list[str],
                 meeting_type: str = "") -> list[str]:
     """Заглушка: собирает 4 темы для разговора из пожеланий пользователя."""
     topics: list[str] = []
+
+    # 1) Самое личное — тема из заметок пользователя ("любим кофе")
     if notes:
         topics.append(f"Обсудить пожелание «{notes}»: что вам в этом нравится и почему?")
 
+    # 2) Тема по формату встречи (если для него есть готовая)
     if meeting_type in MEETING_TYPE_TOPICS and len(topics) < 4:
         topics.append(MEETING_TYPE_TOPICS[meeting_type])
 
+    # 3) Одна тема по выбранной атмосфере
     atmosphere_topics = {
         "романтическая": "Как вы познакомились и какой момент вспоминаете чаще всего?",
         "веселая": "Самая смешная история, которая случилась с каждым из вас",
@@ -486,8 +578,9 @@ def make_topics(notes: str, atmosphere: list[str],
     for tag in atmosphere:
         if tag in atmosphere_topics:
             topics.append(atmosphere_topics[tag])
-            break  
+            break  # достаточно одной темы по атмосфере
 
+    # 4) Одна тема по времени суток
     time_topics = {
         "утро": "Как проходит ваше идеальное утро?",
         "день": "Куда любите выбираться среди дня?",
@@ -497,6 +590,7 @@ def make_topics(notes: str, atmosphere: list[str],
     if time_of_day.lower() in time_topics:
         topics.append(time_topics[time_of_day.lower()])
 
+    # 5) Добираем до четырёх из универсального списка
     universal = [
         "Что нового произошло с момента вашей последней встречи?",
         f"Как должна пройти идеальная встреча с «{companion}»?",
@@ -510,11 +604,43 @@ def make_topics(notes: str, atmosphere: list[str],
     return topics[:4]
 
 
+# ============================================================
+# 7. ВНЕШНИЕ СЕРВИСЫ И СТРАХОВКА ОТ ПАДЕНИЙ.
+#
+#    Уровни источников мест и тем (от лучшего к запасному):
+#
+#      Уровень 1: OpenRouter (ИИ)        — нужны OPENROUTER_API_KEY и интернет
+#      Уровень 2: Google Places          — нужны GOOGLE_API_KEY и интернет
+#      Уровень 3: заглушка PLACES_LIBRARY — работает всегда
+#
+#    КАК РАБОТАЕТ СТРАХОВКА: каждая функция внешнего сервиса возвращает
+#    None вместо исключения, если ключ не задан, сеть недоступна,
+#    ключ не принят или ответ не по формату. Эндпоинт /api/generate
+#    просто переходит на следующий уровень. Ошибки 500 не бывает:
+#    пользователь всегда получает 200 OK с местами и темами.
+# ============================================================
+
+# --- OpenRouter (ИИ) ---
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-AI_MODEL = os.getenv("OPENROUTER_MODEL", "openai/gpt-5.6")
+# Модель по умолчанию — "openrouter/free": специальный БЕСПЛАТНЫЙ роутер
+# OpenRouter, который сам выбирает любую доступную бесплатную модель,
+# поэтому его слаг не устаревает. Свою модель можно задать без правки
+# кода: создай переменную окружения OPENROUTER_MODEL (список моделей:
+# https://openrouter.ai/models)
+AI_MODEL = os.getenv("OPENROUTER_MODEL", "openrouter/free")
 
+# Запасные бесплатные модели: если основная недоступна (исчерпан дневной
+# лимит бесплатных запросов, слаг устарел и т.п.), пробуем следующую.
+# Так уровень ИИ остаётся «работающим» даже при сбоях отдельных моделей.
+AI_MODEL_FALLBACKS = [
+    "google/gemini-2.0-flash-exp:free",
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "deepseek/deepseek-chat:free",
+]
+
+# Сколько секунд ждать ответ нейросети (она может думать подолго)
 AI_TIMEOUT_SECONDS = 60
 
 
@@ -549,8 +675,9 @@ def build_prompt(city_name: str, companion: str, meeting_type: str,
 
 def ask_openrouter(prompt: str) -> Optional[str]:
     """Уровень 1: отправляет промпт в OpenRouter и возвращает текст ответа.
-    Если ключа нет или что-то пошло не так — возвращает None (страховка)."""
-    api_key = os.getenv("OPENROUTER_API_KEY")   
+    Пробует основную модель, затем запасные бесплатные из AI_MODEL_FALLBACKS.
+    Если ключа нет или все модели недоступны — None (страховка)."""
+    api_key = os.getenv("OPENROUTER_API_KEY")   # <-- ПРОВЕРКА КЛЮЧА ИИ
     if not api_key:
         print("OpenRouter: ключ OPENROUTER_API_KEY не задан — пропускаем уровень ИИ.")
         return None
@@ -558,24 +685,32 @@ def ask_openrouter(prompt: str) -> Optional[str]:
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
+        # OpenRouter просит называть проект — так он видит, откуда трафик
         "HTTP-Referer": "http://127.0.0.1:8000",
         "X-Title": "TET-a-TET",
     }
-    body = {
-        "model": AI_MODEL,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.8,     
-        "max_tokens": 1200,     
-    }
 
-    try:
-        response = requests.post(OPENROUTER_URL, headers=headers, json=body,
-                                 timeout=AI_TIMEOUT_SECONDS)
-        response.raise_for_status()  
-        return response.json()["choices"][0]["message"]["content"]
-    except (requests.RequestException, KeyError, IndexError, ValueError) as error:
-        print(f"OpenRouter: запрос не удался ({error}) — пропускаем уровень ИИ.")
-        return None
+    for model in [AI_MODEL] + AI_MODEL_FALLBACKS:
+        body = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.8,     # 0.8 = немного творчества в ответах
+            "max_tokens": 1200,     # предел длины ответа нейросети
+        }
+        try:
+            response = requests.post(OPENROUTER_URL, headers=headers, json=body,
+                                     timeout=AI_TIMEOUT_SECONDS)
+            response.raise_for_status()  # исключение, если код ответа 4xx/5xx
+            content = response.json()["choices"][0]["message"]["content"]
+            print(f"OpenRouter: ответила модель {model}.")
+            return content
+        except (requests.RequestException, KeyError, IndexError, ValueError) as error:
+            # Сеть недоступна, ключ не принят, лимит бесплатной модели
+            # исчерпан — пробуем следующую модель, это НЕ ошибка сервера.
+            print(f"OpenRouter: модель {model} недоступна ({error}) — пробуем следующую.")
+
+    print("OpenRouter: ни одна модель не ответила — пропускаем уровень ИИ.")
+    return None
 
 
 def parse_ai_answer(text: Optional[str]) -> Optional[GenerateResponse]:
@@ -584,6 +719,8 @@ def parse_ai_answer(text: Optional[str]) -> Optional[GenerateResponse]:
     if not text:
         return None
 
+    # Нейросети любят добавлять текст вокруг JSON или маркировку ```json.
+    # Надёжный способ: взять кусок между первой "{" и последней "}".
     start = text.find("{")
     end = text.rfind("}")
     if start == -1 or end <= start:
@@ -613,10 +750,15 @@ def parse_ai_answer(text: Optional[str]) -> Optional[GenerateResponse]:
     return GenerateResponse(places=places, topics=topics)
 
 
+# --- Google Places (настоящие места) ---
+
+# Google Places API (New): поиск по текстовой фразе
 GOOGLE_PLACES_URL = "https://places.googleapis.com/v1/places:searchText"
 
+# Сколько секунд ждать ответ Google (он отвечает быстро)
 GOOGLE_TIMEOUT_SECONDS = 10
 
+# Какие типы мест Google переводить на русский в поле category
 PLACE_TYPE_RU = {
     "cafe": "кафе",
     "restaurant": "ресторан",
@@ -630,6 +772,7 @@ PLACE_TYPE_RU = {
     "movie_theater": "кинотеатр",
 }
 
+# Какое место искать в Google под каждую атмосферу
 ATMOSPHERE_TO_SEARCH = {
     "уютная": "кафе",
     "спокойная": "парк",
@@ -651,6 +794,7 @@ def get_places_from_google(city_name: str, atmosphere: list[str]) -> Optional[li
         print("Google Places: ключ GOOGLE_API_KEY не задан — пропускаем уровень Google.")
         return None
 
+    # Выбираем, ЧТО искать: первое совпадение атмосферы или кафе по умолчанию
     search_word = "кафе"
     for tag in atmosphere:
         if tag in ATMOSPHERE_TO_SEARCH:
@@ -660,6 +804,7 @@ def get_places_from_google(city_name: str, atmosphere: list[str]) -> Optional[li
     headers = {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": api_key,
+        # Какие поля возвращать — за неиспрошенные поля Google берёт деньги
         "X-Goog-FieldMask": "places.displayName,places.formattedAddress,"
                             "places.rating,places.primaryType",
     }
@@ -682,6 +827,7 @@ def get_places_from_google(city_name: str, atmosphere: list[str]) -> Optional[li
         print("Google Places: ничего не нашлось — пропускаем уровень Google.")
         return None
 
+    # Нормализация: сырой ответ Google -> наши DTO PlaceOut
     result = []
     for place in raw_places[:3]:
         name = (place.get("displayName") or {}).get("text", "Место")
@@ -703,6 +849,9 @@ def get_places_from_google(city_name: str, atmosphere: list[str]) -> Optional[li
     return result
 
 
+# ============================================================
+# 8. ГЛАВНАЯ СТРАНИЦА (HTML-визитка проекта)
+# ============================================================
 
 HOME_HTML = """<!DOCTYPE html>
 <html lang="ru">
@@ -792,6 +941,9 @@ def home():
     return HOME_HTML
 
 
+# ============================================================
+# 9. ЭНДПОИНТЫ API
+# ============================================================
 
 @app.get("/api/countries", response_model=CountriesResponse)
 def get_countries(search: Optional[str] = None, db: Session = Depends(get_db)):
@@ -817,11 +969,13 @@ def get_cities(countryId: Optional[str] = None, search: Optional[str] = None,
     Параметры можно использовать вместе или по отдельности."""
     query = db.query(City)
 
+    # Точное совпадение кода страны — можно фильтровать прямо в SQL
     if countryId:
         query = query.filter(City.country_id == countryId)
 
     cities = query.all()
 
+    # Поиск по названию — на Python (см. комментарий в /api/countries)
     if search:
         search_lower = search.lower()
         cities = [c for c in cities if search_lower in c.name.lower()]
@@ -840,9 +994,12 @@ def generate(request: GenerateRequest):
     Ни на одном уровне ошибка 500 не выходит наружу: при любой проблеме
     включается следующий уровень, и пользователь всегда получает ответ.
     """
+    # Подсказки по атмосфере из формата встречи: бэкенд сам понимает,
+    # какие места подходят ("Деловая встреча" -> формальная и т.д.)
     hints = MEETING_TYPE_HINTS.get(request.meetingType, [])
     effective_atmosphere = request.atmosphere + hints
 
+    # --- Уровень 1: настоящий ИИ (OpenRouter) ---
     prompt = build_prompt(request.cityName, request.companion,
                           request.meetingType, request.atmosphere,
                           request.timeOfDay, request.customNotes,
@@ -852,6 +1009,7 @@ def generate(request: GenerateRequest):
         print("Генерация: источник — OpenRouter (ИИ).")
         return ai_result
 
+    # --- Уровень 2: настоящие места из Google Places, темы — локальные ---
     google_places = get_places_from_google(request.cityName, effective_atmosphere)
     if google_places is not None:
         print("Генерация: места — Google Places, темы — локальный генератор.")
@@ -862,6 +1020,7 @@ def generate(request: GenerateRequest):
                                request.meetingType),
         )
 
+    # --- Уровень 3: полная заглушка (работает всегда) ---
     print("Генерация: источник — локальная заглушка PLACES_LIBRARY.")
     return GenerateResponse(
         places=pick_places(effective_atmosphere, request.cityName, request.timeOfDay),
@@ -871,6 +1030,9 @@ def generate(request: GenerateRequest):
     )
 
 
+# ============================================================
+# 10. ЗАПУСК СЕРВЕРА: python main.py
+# ============================================================
 if __name__ == "__main__":
     import uvicorn
 
