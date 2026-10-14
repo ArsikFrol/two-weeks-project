@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 #  TET-a-TET — «Генератор мест и тем для встреч»
-#  Финальный бэкенд в одном файле:
+#  Бэкенд в одном файле:
 #  FastAPI + SQLAlchemy + SQLite + OpenRouter (ИИ) + Google Places
 #
 #  Как запустить:
@@ -10,17 +10,30 @@
 #    3) Главная страница: http://127.0.0.1:8000/
 #       Документация API: http://127.0.0.1:8000/docs
 #
-#  Переменные окружения (все НЕобязательны — без них работает заглушка):
-#    OPENROUTER_API_KEY  — ключ с https://openrouter.ai/keys (ИИ: места + темы)
-#    GOOGLE_API_KEY      — ключ Google Places (настоящие места по городу)
-#    OPENROUTER_MODEL    — модель ИИ (по умолчанию "openrouter/free" —
-#                          бесплатный роутер OpenRouter)
+#  Эндпоинты:
+#    GET  /                      — HTML-визитка проекта
+#    GET  /api/countries         — справочник стран (?search=, ?slug=)
+#    GET  /api/cities            — справочник городов (?countryId=,
+#                                  ?countrySlug=, ?slug=, ?search=)
+#    POST /api/generate          — подбор 3 мест + 4 тем (3 уровня страховки)
+#    POST /api/auth/registration — создание аккаунта
+#    POST /api/auth/login        — вход (проверка email и пароля)
+#    GET  /api/profileCard       — карточки всех пользователей
 #
-#  ГЛАВНАЯ ГАРАНТИЯ: какими бы ни были ключи и сеть, POST /api/generate
-#  ВСЕГДА возвращает 200 OK с местами и темами — при любой ошибке
-#  включается встроенная заглушка PLACES_LIBRARY (см. секцию 6).
+#  Переменные окружения (все НЕобязательны — без них работает заглушка):
+#    OPENROUTER_API_KEY  — ключ с https://openrouter.ai/keys (ИИ)
+#    GOOGLE_API_KEY      — ключ Google Places (настоящие места)
+#    OPENROUTER_MODEL    — модель ИИ (по умолчанию "openrouter/free")
+#
+#  Тестовые пользователи после первого запуска (пароль у всех "1234"):
+#    ivan@example.com, anna@example.com, kira@example.com,
+#    arseniy@example.com
+#
+#  ГЛАВНАЯ ГАРАНТИЯ: /api/generate ВСЕГДА возвращает 200 OK с местами
+#  и темами; auth-эндпоинты всегда отвечают 200 OK со полем success.
 # ============================================================
 
+import hashlib
 import json
 import os
 import random
@@ -31,14 +44,16 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
-from sqlalchemy import Column, ForeignKey, Integer, String, create_engine
+from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, create_engine
 from sqlalchemy.orm import Session, declarative_base, relationship, sessionmaker
 
 # ============================================================
-# 1. БАЗА ДАННЫХ (SQLite — файл places.db появится рядом со скриптом)
+# 1. БАЗА ДАННЫХ (SQLite — файл places_v4.db появится рядом со скриптом).
+#     v4 — добавлены таблицы пользователей; новый файл гарантирует,
+#     что все колонки создадутся с нуля без конфликтов со старыми базами.
 # ============================================================
 
-DATABASE_URL = "sqlite:///./places.db"
+DATABASE_URL = "sqlite:///./places_v4.db"
 
 # check_same_thread=False — особенность SQLite: FastAPI работает с базой
 # из разных потоков, без этого параметра SQLite выдаст ошибку.
@@ -53,17 +68,19 @@ Base = declarative_base()
 
 # ============================================================
 # 2. МОДЕЛИ (описание таблиц базы данных).
-#    Внутри базы поля в snake_case (count_places) — это внутреннее
-#    дело бэкенда. Наружу (фронтенду) отдаём camelCase через
-#    DTO-схемы из секции 4.
+#     Внутри базы поля в snake_case (count_places) — это внутреннее
+#     дело бэкенда. Наружу (фронтенду) отдаём camelCase через
+#     DTO-схемы из секции 4.
 # ============================================================
 
 class Country(Base):
-    """Страна. id — короткий код: 'ru', 'kz', 'uz', 'by'."""
+    """Страна. id — короткий код: 'ru', 'kz', 'uz', 'by', 'tr', 'ge'.
+    slug — латинское имя для ссылок и фильтров: 'russia', 'turkey'..."""
     __tablename__ = "countries"
 
     id = Column(String, primary_key=True)        # "ru"
     name = Column(String, nullable=False)        # "Россия"
+    slug = Column(String, unique=True, nullable=False)   # "russia"
     count_places = Column(Integer, default=0)    # всего мест в стране (число)
 
     # у одной страны много городов
@@ -71,12 +88,12 @@ class Country(Base):
 
 
 class City(Base):
-    """Город. id — код вида 'ru-mow'. count_places — строка, потому что
-    по контракту с фронтендом она может быть '50+'."""
+    """Город. id — код вида 'ru-mow'. slug — латинское имя: 'moscow'."""
     __tablename__ = "cities"
 
     id = Column(String, primary_key=True)        # "ru-mow"
     name = Column(String, nullable=False)        # "Москва"
+    slug = Column(String, nullable=False)        # "moscow"
     count_places = Column(String, default="0")   # строка: "50+", "20+" ...
     country_id = Column(String, ForeignKey("countries.id"), nullable=False)
 
@@ -84,13 +101,53 @@ class City(Base):
     country = relationship("Country", back_populates="cities")
 
 
+class User(Base):
+    """Аккаунт для входа: email + пароль (хранится ТОЛЬКО хэш пароля,
+    не сам пароль — так принято даже в учебных проектах)."""
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    email = Column(String, unique=True, nullable=False)          # "ivan@example.com"
+    password_hash = Column(String, nullable=False)               # хэш пароля
+
+    # у каждого аккаунта одна карточка профиля
+    profile = relationship("UserProfile", back_populates="user", uselist=False)
+
+
+class UserProfile(Base):
+    """Карточка профиля — то, что фронтенд показывает в списке людей."""
+    __tablename__ = "user_profiles"
+
+    profile_id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    photo_profile = Column(String, default="")   # ссылка на фото
+    name = Column(String, nullable=False)        # "Иван"
+    age = Column(Integer, nullable=False)        # 25
+    user_name = Column(String, unique=True, nullable=False)   # ник: "ivan_traveler"
+    description = Column(String, default="")     # "о себе"
+    favourites = Column(Boolean, default=False)  # избранный профиль (по ТЗ Арсения)
+
+    # профиль принадлежит одному аккаунту
+    user = relationship("User", back_populates="profile")
+
+
 # ============================================================
 # 3. НАЧАЛЬНОЕ ЗАПОЛНЕНИЕ БАЗЫ (SEED)
 # ============================================================
 
+def hash_password(password: str) -> str:
+    """Превращает пароль в хэш: из хэша нельзя восстановить пароль,
+    но можно проверить, что введённый пароль совпадает сoriginal.
+    Для учебного проекта соль фиксированная; в настоящем продакшене
+    используют уникальную соль на пользователя и библиотеку bcrypt."""
+    return hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"), b"tet-a-tet-static-salt", 100_000
+    ).hex()
+
+
 def seed_database() -> None:
-    """Создаёт таблицы и один раз заполняет их странами и городами.
-    Если страны в базе уже есть — ничего не делает."""
+    """Создаёт таблицы и один раз заполняет их странами, городами
+    и тестовыми профилями. Если страны уже есть — ничего не делает."""
     Base.metadata.create_all(bind=engine)  # создаёт таблицы, если их ещё нет
 
     db = SessionLocal()
@@ -98,41 +155,78 @@ def seed_database() -> None:
         if db.query(Country).first() is not None:  # база уже заполнена
             return
 
-        # (код страны, название, всего мест, [(код города, название, мест), ...])
+        # (код, название, слаг, всего мест,
+        #  [(код города, название, слаг города, мест), ...])
         data = [
-            ("ru", "Россия", 115, [
-                ("ru-mow", "Москва", "50+"),
-                ("ru-spb", "Санкт-Петербург", "40+"),
-                ("ru-ekb", "Екатеринбург", "30+"),
-                ("ru-kzn", "Казань", "20+"),
-                ("ru-nsk", "Новосибирск", "15+"),
+            ("ru", "Россия", "russia", 155, [
+                ("ru-mow", "Москва", "moscow", "50+"),
+                ("ru-spb", "Санкт-Петербург", "saint-petersburg", "40+"),
+                ("ru-ekb", "Екатеринбург", "ekaterinburg", "30+"),
+                ("ru-kzn", "Казань", "kazan", "20+"),
+                ("ru-nsk", "Новосибирск", "novosibirsk", "15+"),
             ]),
-            ("kz", "Казахстан", 55, [
-                ("kz-ala", "Алматы", "25+"),
-                ("kz-ast", "Астана", "20+"),
-                ("kz-shy", "Шымкент", "10+"),
+            ("kz", "Казахстан", "kazakhstan", 55, [
+                ("kz-ala", "Алматы", "almaty", "25+"),
+                ("kz-ast", "Астана", "astana", "20+"),
+                ("kz-shy", "Шымкент", "shymkent", "10+"),
             ]),
-            ("uz", "Узбекистан", 38, [
-                ("uz-tas", "Ташкент", "20+"),
-                ("uz-sam", "Самарканд", "10+"),
-                ("uz-buk", "Бухара", "8+"),
+            ("uz", "Узбекистан", "uzbekistan", 38, [
+                ("uz-tas", "Ташкент", "tashkent", "20+"),
+                ("uz-sam", "Самарканд", "samarkand", "10+"),
+                ("uz-buk", "Бухара", "bukhara", "8+"),
             ]),
-            ("by", "Беларусь", 46, [
-                ("by-msq", "Минск", "25+"),
-                ("by-gom", "Гомель", "8+"),
-                ("by-brst", "Брест", "7+"),
-                ("by-grd", "Гродно", "6+"),
+            ("by", "Беларусь", "belarus", 46, [
+                ("by-msq", "Минск", "minsk", "25+"),
+                ("by-gom", "Гомель", "gomel", "8+"),
+                ("by-brst", "Брест", "brest", "7+"),
+                ("by-grd", "Гродно", "grodno", "6+"),
+            ]),
+            ("tr", "Турция", "turkey", 135, [
+                ("tr-ist", "Стамбул", "istanbul", "60+"),
+                ("tr-ayt", "Анталья", "antalya", "30+"),
+                ("tr-ank", "Анкара", "ankara", "25+"),
+                ("tr-izm", "Измир", "izmir", "20+"),
+            ]),
+            ("ge", "Грузия", "georgia", 70, [
+                ("ge-tbs", "Тбилиси", "tbilisi", "35+"),
+                ("ge-bus", "Батуми", "batumi", "25+"),
+                ("ge-kut", "Кутаиси", "kutaisi", "10+"),
             ]),
         ]
 
-        for country_id, country_name, total, cities in data:
-            db.add(Country(id=country_id, name=country_name, count_places=total))
-            for city_id, city_name, places in cities:
-                db.add(City(id=city_id, name=city_name,
+        for country_id, country_name, country_slug, total, cities in data:
+            db.add(Country(id=country_id, name=country_name,
+                           slug=country_slug, count_places=total))
+            for city_id, city_name, city_slug, places in cities:
+                db.add(City(id=city_id, name=city_name, slug=city_slug,
                             count_places=places, country_id=country_id))
 
+        # Тестовые профили, чтобы фронтенд сразу видел карточки.
+        # Пароль у всех — "1234".
+        test_users = [
+            ("ivan@example.com", "Иван", 25, "ivan_traveler",
+             "Люблю кофейни, долгие прогулки и настолки. Ищу компанию на выходные.",
+             "https://i.pravatar.cc/150?img=12", True),
+            ("anna@example.com", "Анна", 23, "anna_reader",
+             "Книжные клубы, тихие антикафе и планетарий — моя стихия.",
+             "https://i.pravatar.cc/150?img=45", False),
+            ("kira@example.com", "Кира", 24, "kira_photo",
+             "Фотографирую город и ищу интересные локации для съёмок.",
+             "https://i.pravatar.cc/150?img=32", True),
+            ("arseniy@example.com", "Арсений", 26, "ars_dev",
+             "Деловые встречи, воркшопы и мозговые штурмы в спокойных местах.",
+             "https://i.pravatar.cc/150?img=59", False),
+        ]
+        for email, name, age, user_name, description, photo, fav in test_users:
+            user = User(email=email, password_hash=hash_password("1234"))
+            db.add(user)
+            db.flush()   # получаем user.id до сохранения профиля
+            db.add(UserProfile(user_id=user.id, name=name, age=age,
+                               user_name=user_name, description=description,
+                               photo_profile=photo, favourites=fav))
+
         db.commit()
-        print("База данных places.db создана и заполнена тестовыми данными.")
+        print("База places_v4.db создана: 6 стран, 22 города, 4 тестовых профиля.")
     finally:
         db.close()
 
@@ -147,19 +241,21 @@ seed_database()  # выполняется сразу при запуске фа�
 #      входящие запросы верхнего уровня  -> ...Request  (GenerateRequest)
 #      ответы сервера верхнего уровня    -> ...Response (CountriesResponse)
 #      вложенные объекты в ответах       -> ...Out      (CountryOut, PlaceOut)
-#      вложенные объекты в запросах      -> ...In       (пока таких нет —
-#        появятся, например, в формах регистрации)
+#      вложенные объекты в запросах      -> ...In       (появятся, когда
+#        какой-то запрос станет сложным и потребует вложенности)
 #
-#    Все поля DTO — в camelCase (countryId, countPlaces, timeOfDay),
-#    чтобы фронтенду на Next.js не приходилось ничего конвертировать.
+#    Все поля DTO — в camelCase (countryId, countPlaces, timeOfDay,
+#    photoProfile), чтобы фронтенду на Next.js не приходилось
+#    ничего конвертировать.
 # ============================================================
 
-# --- Ответы GET-запросов (верхний уровень — ...Response) ---
+# --- Справочники: страны и города ---
 
 class CountryOut(BaseModel):
     """Страна (вложенный объект ответа)."""
     countryId: str
     name: str
+    slug: str
     countPlaces: int
 
 
@@ -172,6 +268,7 @@ class CityOut(BaseModel):
     """Город (вложенный объект ответа)."""
     cityId: str
     name: str
+    slug: str
     countPlaces: str
 
 
@@ -190,10 +287,199 @@ class PlaceOut(BaseModel):
 
 
 class GenerateResponse(BaseModel):
-    """Ответ POST /api/generate — ровно та структура, что согласована
-    с фронтендом: 3 места + 4 темы для разговора."""
+    """Ответ POST /api/generate — 3 места + 4 темы для разговора."""
     places: list[PlaceOut]
     topics: list[str]
+
+
+class GenerateRequest(BaseModel):
+    """Тело запроса POST /api/generate.
+
+    Принимает ДВА формата — каноничный и форму Арсения:
+      1) каноничный: companion, meetingType, atmosphere (список),
+         timeOfDay, countryName, cityName, customNotes;
+      2) форма фронтендера: person="wife", metting="presentation",
+         atmosphere="quiet" (строкой), city, country, min/max (бюджет),
+         time="22:01". date, firstName, lastName игнорируются.
+    Английские значения автоматически переводятся в русские теги.
+    """
+    companion: str = Field(default="",
+                           validation_alias=AliasChoices("companion", "person"))
+    meetingType: str = Field(default="",
+                             validation_alias=AliasChoices("meetingType", "metting", "meeting"))
+    atmosphere: list[str] = Field(default_factory=list)
+
+    timeOfDay: str = ""
+    arrivalTime: str = Field(default="",
+                             validation_alias=AliasChoices("arrivalTime", "time"))
+
+    countryName: str = Field(default="",
+                             validation_alias=AliasChoices("countryName", "country"))
+    cityName: str = Field(default="",
+                          validation_alias=AliasChoices("cityName", "city"))
+    customNotes: str = ""
+
+    budgetMin: int = Field(default=0,
+                           validation_alias=AliasChoices("budgetMin", "min"))
+    budgetMax: int = Field(default=0,
+                           validation_alias=AliasChoices("budgetMax", "max"))
+
+    @field_validator("atmosphere", mode="before")
+    @classmethod
+    def atmosphere_accepts_string(cls, value):
+        """Атмосфера может прийти строкой ("quiet") или списком."""
+        if value is None:
+            return []
+        if isinstance(value, str):
+            value = [value]
+        return [ru_tag(ATMOSPHERE_RU, item) for item in value]
+
+    @field_validator("companion", mode="before")
+    @classmethod
+    def translate_person(cls, value):
+        return ru_tag(PERSON_RU, value) if value else ""
+
+    @field_validator("meetingType", mode="before")
+    @classmethod
+    def translate_meeting(cls, value):
+        return ru_tag(MEETING_RU, value) if value else ""
+
+    @model_validator(mode="after")
+    def derive_time_of_day(self) -> "GenerateRequest":
+        """Если timeOfDay не прислали, но есть точное время "22:01" —
+        вычисляем часть суток сами."""
+        if not self.timeOfDay and self.arrivalTime:
+            try:
+                hour = int(str(self.arrivalTime).strip().split(":")[0])
+            except ValueError:
+                return self
+            if 5 <= hour < 11:
+                self.timeOfDay = "утро"
+            elif 11 <= hour < 17:
+                self.timeOfDay = "день"
+            elif 17 <= hour < 23:
+                self.timeOfDay = "вечер"
+            else:
+                self.timeOfDay = "ночь"
+        return self
+
+
+# --- Регистрация и вход ---
+
+def lower_text(value) -> str:
+    """Приводит любое значение к строке в нижнем регистре (для email)."""
+    return str(value).strip().lower() if value else ""
+
+
+class RegistrationRequest(BaseModel):
+    """Тело POST /api/auth/registration.
+
+    Обязательны email и password. Остальное — данные карточки профиля;
+    если name не прислали, собираем его из firstName + lastName,
+    если userName пустой — делаем из email ("ivan@example.com" ->
+    "ivan").
+    """
+    email: str
+    password: str
+    name: str = ""
+    age: int = 18
+    userName: str = ""
+    description: str = ""
+    photoProfile: str = ""
+    firstName: str = ""     # форма Арсения шлёт имя и фамилию отдельно
+    lastName: str = ""
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, value):
+        return lower_text(value)
+
+    @field_validator("age", mode="before")
+    @classmethod
+    def age_accepts_string(cls, value):
+        """Возраст может прийти строкой ("25") — приводим к числу."""
+        if value in (None, ""):
+            return 18
+        try:
+            return int(value)
+        except (ValueError, TypeError):
+            return 18
+
+    @model_validator(mode="after")
+    def fill_missing_fields(self) -> "RegistrationRequest":
+        if not self.name and (self.firstName or self.lastName):
+            self.name = (self.firstName + " " + self.lastName).strip()
+        if not self.userName and self.email:
+            self.userName = self.email.split("@")[0]
+        return self
+
+
+class LoginRequest(BaseModel):
+    """Тело POST /api/auth/login."""
+    email: str = Field(validation_alias=AliasChoices("email", "login"))
+    password: str = ""
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, value):
+        return lower_text(value)
+
+
+class AuthResponse(BaseModel):
+    """Ответ auth-эндпоинтов. Всегда HTTP 200 — результат смотри
+    в поле success: True = операция удалась, False = нет (тогда
+    в message лежит человеческое объяснение)."""
+    success: bool
+    message: str
+    profileId: Optional[int] = None
+
+
+class ProfileCardOut(BaseModel):
+    """Карточка пользователя (вложенный объект ответа)."""
+    profileId: int
+    name: str
+    age: int
+    userName: str
+    description: str
+    photoProfile: str
+    favourites: bool
+
+
+class ProfileCardsResponse(BaseModel):
+    """Ответ GET /api/profileCard."""
+    data: list[ProfileCardOut]
+
+
+# Вспомогательные функции: превращают объект базы в DTO для ответа.
+# Здесь и происходит превращение snake_case (база) в camelCase (API).
+def to_country_out(country: Country) -> CountryOut:
+    return CountryOut(
+        countryId=country.id,
+        name=country.name,
+        slug=country.slug,
+        countPlaces=country.count_places,
+    )
+
+
+def to_city_out(city: City) -> CityOut:
+    return CityOut(
+        cityId=city.id,
+        name=city.name,
+        slug=city.slug,
+        countPlaces=city.count_places,
+    )
+
+
+def to_profile_card_out(profile: UserProfile) -> ProfileCardOut:
+    return ProfileCardOut(
+        profileId=profile.profile_id,
+        name=profile.name,
+        age=profile.age,
+        userName=profile.user_name,
+        description=profile.description or "",
+        photoProfile=profile.photo_profile or "",
+        favourites=bool(profile.favourites),
+    )
 
 
 # --- Перевод значений формы фронтенда в русские теги ---
@@ -252,106 +538,6 @@ def ru_tag(translation: dict, value) -> str:
     return translation.get(text.lower(), text)
 
 
-class GenerateRequest(BaseModel):
-    """Тело запроса POST /api/generate (входящий запрос верхнего уровня).
-
-    Принимает ДВА формата — каноничный и форму Арсения:
-
-      1) Каноничный (наш): companion, meetingType, atmosphere (список
-         русских тегов), timeOfDay, countryName, cityName, customNotes.
-
-      2) Формат формы фронтендера: person="wife", metting="presentation"
-         (да, с опечаткой — принимаем как есть), atmosphere="quiet"
-         (строкой), city, country, min/max (бюджет), time="22:01".
-         date, firstName, lastName пока игнорируются («на будущее»).
-
-    Поля-алиасы означают: запрос можно прислать и со старым именем
-    (cityName), и с новым (city) — Pydantic поймёт оба. Английские
-    значения автоматически переводятся в русские теги, поэтому вся
-    остальная логика (подсказки, заглушка, промпт) работает как раньше.
-    """
-    companion: str = Field(default="",
-                           validation_alias=AliasChoices("companion", "person"))
-    meetingType: str = Field(default="",
-                             validation_alias=AliasChoices("meetingType", "metting", "meeting"))
-    atmosphere: list[str] = Field(default_factory=list)
-
-    timeOfDay: str = ""
-    # Точное время с формы ("22:01"); из него вычислим timeOfDay, если его нет
-    arrivalTime: str = Field(default="",
-                             validation_alias=AliasChoices("arrivalTime", "time"))
-
-    countryName: str = Field(default="",
-                             validation_alias=AliasChoices("countryName", "country"))
-    cityName: str = Field(default="",
-                          validation_alias=AliasChoices("cityName", "city"))
-    customNotes: str = ""
-
-    budgetMin: int = Field(default=0,
-                           validation_alias=AliasChoices("budgetMin", "min"))
-    budgetMax: int = Field(default=0,
-                           validation_alias=AliasChoices("budgetMax", "max"))
-
-    @field_validator("atmosphere", mode="before")
-    @classmethod
-    def atmosphere_accepts_string(cls, value):
-        """Атмосфера может прийти строкой ("quiet") или списком — принимаем оба
-        варианта и переводим английские значения в русские теги."""
-        if value is None:
-            return []
-        if isinstance(value, str):
-            value = [value]
-        return [ru_tag(ATMOSPHERE_RU, item) for item in value]
-
-    @field_validator("companion", mode="before")
-    @classmethod
-    def translate_person(cls, value):
-        return ru_tag(PERSON_RU, value) if value else ""
-
-    @field_validator("meetingType", mode="before")
-    @classmethod
-    def translate_meeting(cls, value):
-        return ru_tag(MEETING_RU, value) if value else ""
-
-    @model_validator(mode="after")
-    def derive_time_of_day(self) -> "GenerateRequest":
-        """Если timeOfDay не прислали, но есть точное время "22:01" —
-        вычисляем часть суток сами."""
-        if not self.timeOfDay and self.arrivalTime:
-            try:
-                hour = int(str(self.arrivalTime).strip().split(":")[0])
-            except ValueError:
-                return self
-            if 5 <= hour < 11:
-                self.timeOfDay = "утро"
-            elif 11 <= hour < 17:
-                self.timeOfDay = "день"
-            elif 17 <= hour < 23:
-                self.timeOfDay = "вечер"
-            else:
-                self.timeOfDay = "ночь"
-        return self
-
-
-# Вспомогательные функции: превращают объект базы в DTO для ответа.
-# Здесь и происходит превращение snake_case (база) в camelCase (API):
-# id -> countryId/cityId, count_places -> countPlaces.
-def to_country_out(country: Country) -> CountryOut:
-    return CountryOut(
-        countryId=country.id,
-        name=country.name,
-        countPlaces=country.count_places,
-    )
-
-
-def to_city_out(city: City) -> CityOut:
-    return CityOut(
-        cityId=city.id,
-        name=city.name,
-        countPlaces=city.count_places,
-    )
-
-
 # ============================================================
 # 5. ПРИЛОЖЕНИЕ FASTAPI + CORS
 # ============================================================
@@ -359,7 +545,7 @@ def to_city_out(city: City) -> CityOut:
 app = FastAPI(
     title="TET-a-TET API",
     description="Генератор мест и тем для встреч",
-    version="3.2.0",
+    version="4.0.0",
 )
 
 # CORS разрешает браузеру (фронтенду) отправлять запросы на этот сервер,
@@ -383,9 +569,9 @@ def get_db():
 
 # ============================================================
 # 6. ЛОКАЛЬНАЯ ЗАГЛУШКА PLACES_LIBRARY (уровень страховки №3).
-#    Это запасной источник данных: работает БЕЗ интернета, БЕЗ ключей
-#    и БЕЗ денег. Сюда бэкенд падает при ЛЮБОЙ проблеме с внешними
-#    API — поэтому пользователь гарантированно получает результат.
+#     Это запасной источник данных: работает БЕЗ интернета, БЕЗ ключей
+#     и БЕЗ денег. Сюда бэкенд падает при ЛЮБОЙ проблеме с внешними
+#     API — поэтому пользователь гарантированно получает результат.
 # ============================================================
 
 # Слова для подстановки времени суток в описания мест
@@ -487,6 +673,30 @@ PLACES_LIBRARY = [
 ]
 
 
+def pick_places(atmosphere: list[str], city_name: str, time_of_day: str) -> list[PlaceOut]:
+    """Заглушка: возвращает 3 места из библиотеки — сначала те,
+    что совпадают по атмосфере."""
+    wanted = set(atmosphere)
+
+    matching = [p for p in PLACES_LIBRARY if wanted & set(p["tags"])]
+    others = [p for p in PLACES_LIBRARY if not wanted & set(p["tags"])]
+
+    # Перемешиваем, чтобы при каждом запросе были разные варианты
+    random.shuffle(matching)
+    random.shuffle(others)
+
+    time_word = TIME_WORDS.get(time_of_day.lower(), "в любое время")
+
+    return [
+        PlaceOut(
+            title=p["title"],
+            category=p["category"],
+            description=p["description"].format(city=city_name, time=time_word),
+        )
+        for p in (matching + others)[:3]
+    ]
+
+
 # Подсказки по атмосфере для каждого формата встречи (теги из макета).
 # Если пользователь не выбрал атмосферу вручную, бэкенд сам понимает,
 # какие места подходят: "Деловая встреча" -> формальная, "Свидание" ->
@@ -523,30 +733,6 @@ MEETING_TYPE_TOPICS = {
     "Семейная встреча": "Новости семьи и планы на ближайшие праздники",
     "Мозговой штурм": "Какая идея кажется самой смелой и почему бы её не попробовать?",
 }
-
-
-def pick_places(atmosphere: list[str], city_name: str, time_of_day: str) -> list[PlaceOut]:
-    """Заглушка: возвращает 3 места из библиотеки — сначала те,
-    что совпадают по атмосфере."""
-    wanted = set(atmosphere)
-
-    matching = [p for p in PLACES_LIBRARY if wanted & set(p["tags"])]
-    others = [p for p in PLACES_LIBRARY if not wanted & set(p["tags"])]
-
-    # Перемешиваем, чтобы при каждом запросе были разные варианты
-    random.shuffle(matching)
-    random.shuffle(others)
-
-    time_word = TIME_WORDS.get(time_of_day.lower(), "в любое время")
-
-    return [
-        PlaceOut(
-            title=p["title"],
-            category=p["category"],
-            description=p["description"].format(city=city_name, time=time_word),
-        )
-        for p in (matching + others)[:3]
-    ]
 
 
 def make_topics(notes: str, atmosphere: list[str],
@@ -633,7 +819,6 @@ AI_MODEL = os.getenv("OPENROUTER_MODEL", "openrouter/free")
 
 # Запасные бесплатные модели: если основная недоступна (исчерпан дневной
 # лимит бесплатных запросов, слаг устарел и т.п.), пробуем следующую.
-# Так уровень ИИ остаётся «работающим» даже при сбоях отдельных моделей.
 AI_MODEL_FALLBACKS = [
     "google/gemini-2.0-flash-exp:free",
     "meta-llama/llama-3.3-70b-instruct:free",
@@ -929,7 +1114,9 @@ HOME_HTML = """<!DOCTYPE html>
         </div>
 
         <a class="docs-button" href="/docs">Открыть документацию API &rarr;</a>
-        <p class="hint">GET /api/countries &middot; GET /api/cities &middot; POST /api/generate</p>
+        <p class="hint">GET /api/countries &middot; GET /api/cities &middot;
+            POST /api/generate &middot; POST /api/auth/registration &middot;
+            POST /api/auth/login &middot; GET /api/profileCard</p>
     </main>
 </body>
 </html>"""
@@ -946,14 +1133,21 @@ def home():
 # ============================================================
 
 @app.get("/api/countries", response_model=CountriesResponse)
-def get_countries(search: Optional[str] = None, db: Session = Depends(get_db)):
-    """Список стран. Необязательный ?search= — поиск по названию.
+def get_countries(search: Optional[str] = None, slug: Optional[str] = None,
+                  db: Session = Depends(get_db)):
+    """Список стран. Параметры (можно вместе или по отдельности):
+    ?search=рос — регистронезависимый поиск по названию;
+    ?slug=russia — страна по слагу."""
+    query = db.query(Country)
 
-    Поиск делаем на Python, а не средствами SQLite: SQLite не умеет
-    понижать регистр русских букв, а Python — умеет.
-    """
-    countries = db.query(Country).all()
+    # Точное совпадение слага — фильтруем прямо в SQL
+    if slug:
+        query = query.filter(Country.slug == slug.lower())
 
+    countries = query.all()
+
+    # Поиск по названию — на Python, а не средствами SQLite: SQLite не умеет
+    # понижать регистр русских букв, а Python — умеет.
     if search:
         search_lower = search.lower()
         countries = [c for c in countries if search_lower in c.name.lower()]
@@ -962,16 +1156,24 @@ def get_countries(search: Optional[str] = None, db: Session = Depends(get_db)):
 
 
 @app.get("/api/cities", response_model=CitiesResponse)
-def get_cities(countryId: Optional[str] = None, search: Optional[str] = None,
+def get_cities(countryId: Optional[str] = None, countrySlug: Optional[str] = None,
+               slug: Optional[str] = None, search: Optional[str] = None,
                db: Session = Depends(get_db)):
-    """Список городов. ?countryId= — города одной страны,
-    ?search= — регистронезависимый поиск по названию города.
-    Параметры можно использовать вместе или по отдельности."""
+    """Список городов. Параметры (можно использовать вместе или по отдельности):
+    ?countryId=ru — города одной страны по её коду;
+    ?countrySlug=russia — города страны по её слагу;
+    ?slug=moscow — один город по своему слагу;
+    ?search=моск — регистронезависимый поиск по названию города."""
     query = db.query(City)
 
-    # Точное совпадение кода страны — можно фильтровать прямо в SQL
+    # Точные совпадения кодов и слагов — фильтруем прямо в SQL
     if countryId:
         query = query.filter(City.country_id == countryId)
+    if countrySlug:
+        # соединяем таблицы: город -> его страна -> слаг страны
+        query = query.join(Country).filter(Country.slug == countrySlug.lower())
+    if slug:
+        query = query.filter(City.slug == slug.lower())
 
     cities = query.all()
 
@@ -981,6 +1183,69 @@ def get_cities(countryId: Optional[str] = None, search: Optional[str] = None,
         cities = [c for c in cities if search_lower in c.name.lower()]
 
     return {"data": [to_city_out(c) for c in cities]}
+
+
+@app.post("/api/auth/registration", response_model=AuthResponse)
+def registration(request: RegistrationRequest, db: Session = Depends(get_db)):
+    """Создаёт аккаунт (User) и карточку профиля (UserProfile).
+
+    Всегда отвечает 200 OK — результат смотри в поле success:
+    True = аккаунт создан, False = отказ (занят email или ник,
+    объяснение — в message).
+    """
+    # Проверка 1: email не должен быть занят
+    if db.query(User).filter(User.email == request.email).first() is not None:
+        return AuthResponse(success=False,
+                            message="Пользователь с таким email уже существует")
+
+    # Проверка 2: ник не должен быть занят
+    if db.query(UserProfile).filter(UserProfile.user_name == request.userName).first() is not None:
+        return AuthResponse(success=False,
+                            message=f"Ник «{request.userName}» уже занят")
+
+    # Создаём аккаунт и профиль одной транзакцией
+    user = User(email=request.email, password_hash=hash_password(request.password))
+    db.add(user)
+    db.flush()   # получаем user.id до commit
+
+    profile = UserProfile(
+        user_id=user.id,
+        name=request.name or "Без имени",
+        age=request.age,
+        user_name=request.userName,
+        description=request.description,
+        photo_profile=request.photoProfile,
+        favourites=False,
+    )
+    db.add(profile)
+    db.commit()
+
+    print(f"Регистрация: создан пользователь {request.email} (профиль {profile.profile_id}).")
+    return AuthResponse(success=True, message="Аккаунт создан",
+                        profileId=profile.profile_id)
+
+
+@app.post("/api/auth/login", response_model=AuthResponse)
+def login(request: LoginRequest, db: Session = Depends(get_db)):
+    """Проверяет email и пароль. Всегда 200 OK — смотри поле success:
+    True = вход выполнен (в profileId — номер профиля пользователя),
+    False = неверный email или пароль."""
+    user = db.query(User).filter(User.email == request.email).first()
+
+    # Один и тот же текст ошибки для «нет такого email» и «неверный пароль» —
+    # так злоумышленник не узнает, какие email зарегистрированы.
+    if user is None or user.password_hash != hash_password(request.password):
+        return AuthResponse(success=False, message="Неверный email или пароль")
+
+    profile_id = user.profile.profile_id if user.profile else None
+    return AuthResponse(success=True, message="Вход выполнен", profileId=profile_id)
+
+
+@app.get("/api/profileCard", response_model=ProfileCardsResponse)
+def get_profile_cards(db: Session = Depends(get_db)):
+    """Карточки всех пользователей — витрина профилей для фронтенда."""
+    profiles = db.query(UserProfile).all()
+    return {"data": [to_profile_card_out(p) for p in profiles]}
 
 
 @app.post("/api/generate", response_model=GenerateResponse)
