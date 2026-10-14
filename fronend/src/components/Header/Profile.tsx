@@ -1,6 +1,6 @@
 'use client'
 
-import { useSession } from "next-auth/react"
+import { signOut, useSession } from "next-auth/react"
 import { useRef, useState } from "react"
 import { ChevronDown, LogOut } from "lucide-react"
 import { useClickAway } from "react-use"
@@ -34,14 +34,22 @@ export function Profile({ page }: Props) {
     const clickElem = (link: TypeRoutes) => {
         setShowMenu(false)
         if (status === 'loading') return
-
-        router.push(link)
+        if (link === '/') {
+            signOut()
+            router.push('/')
+            return
+        } else router.push(link)
     }
 
     useClickAway(ref, () => setShowMenu(false))
 
     return (
-        <div ref={ref} className='relative'>
+        <div ref={ref} className={cn(
+            'relative',
+            session
+                ? ''
+                : 'hidden'
+        )}>
             <div onClick={() => setShowMenu(true)} className={cn(
                 "px-[30px] py-[10px] flex items-center gap-x-[10px]",
                 'hover:translate-y-[-2px] transition-transform duration-300 cursor-pointer',

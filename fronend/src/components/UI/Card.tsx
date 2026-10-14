@@ -1,17 +1,39 @@
 'use client'
 
 import { MessageCircle, Star } from "lucide-react"
+import { useState } from "react"
 
 import { cn } from "@/lib/utils"
 import { ProfileCard } from "@/types/profileCard"
+import { useTypedRouter } from "@/hooks/useTypedRouter"
+import { postFavorites } from "@/api/favorites"
 
 type Props = {
-    obj: ProfileCard
+    obj: ProfileCard,
+    status: "authenticated" | "loading" | "unauthenticated",
+    myId: string
 }
 
-export function Card({ obj }: Props) {
-    const clickStar = () => {
+export function Card({ obj, status, myId }: Props) {
+    const router = useTypedRouter()
 
+    const [isFavorites, setIsFavorites] = useState<boolean>(obj.favourites)
+
+    const clickStar = async () => {
+        if (status === 'unauthenticated') {
+            router.push('/signUp')
+            return
+        }
+
+        try {
+
+            const data = await postFavorites(myId, obj.profileId)
+
+            if (typeof data.data.isFavorite === 'boolean') setIsFavorites(data.data.isFavorite)
+
+        } catch (error) {
+
+        }
     }
 
     const clickMessage = () => {
@@ -26,8 +48,8 @@ export function Card({ obj }: Props) {
                         'p-[10px] bg-[rgba(245,186,154,1)] rounded-full',
                         'hover:translate-y-[-2px] transition-transform duration-300 cursor-pointer'
                     )} onClick={clickStar}>
-                        <Star strokeWidth={1.5} fill={obj.favourites ? 'yellow' : 'white'}
-                            color={obj.favourites ? 'yellow' : 'white'} />
+                        <Star strokeWidth={1.5} fill={isFavorites ? 'yellow' : 'white'}
+                            color={isFavorites ? 'yellow' : 'white'} />
                     </div>
                     <div className='text-center text-[18px]'>{obj.name}</div>
                     <div className={cn(

@@ -9,10 +9,10 @@ export default function NotFound() {
 
     return (
         <main className={cn(
-            "relative flex h-[calc(100vh-77px)] items-center overflow-hidden bg-[linear-gradient(110deg,#a9c0be_0%,#abc9c7_56%,#d4efeb_100%)]"
+            "relative flex min-h-svh items-center overflow-hidden bg-[linear-gradient(110deg,#a9c0be_0%,#abc9c7_56%,#d4efeb_100%)]"
         )}>
             <svg aria-hidden="true" viewBox="0 0 1000 100" preserveAspectRatio="none" className={cn(
-                "pointer-events-none absolute inset-y-0 left-[20%] h-full top-[-50px]",
+                "pointer-events-none absolute inset-y-0 left-[20%] h-full",
                 'w-[36%] opacity-30 max-[700px]:left-1/2 max-[700px]:w-[68%] max-[700px]:-translate-x-1/2'
             )}>
                 <defs>
@@ -41,20 +41,14 @@ export default function NotFound() {
                 <p className="text-[#f4f3df]" style={{ margin: "18px 0 34px", fontSize: "clamp(22px, 3.5vw, 48px)", lineHeight: 1.1 }} >
                     Кажется, этой страницы нет.
                 </p>
-                <div onClick={() => router.push('/')}
-                    className={cn(
-                        "text-[17px] bg-[]",
-                        'font-semibold text-[#f4f3df] hover:border-white hover:text-white',
-                        'flex items-center gap-x-[20px]'
-                    )}
-                    style={{ color: "#f4f3df" }} >
-                    <div className=''>
-                        Вернуться на главную
-                    </div>
-                    <MoveRight strokeWidth={1} className={cn(
-
-                    )} />
-                </div>
+                <button
+                    type="button"
+                    onClick={() => router.push('/')}
+                    className="group inline-flex cursor-pointer items-center gap-3 rounded-lg bg-[#789699] px-5 py-3 text-[17px] font-semibold text-white transition-colors duration-200 hover:bg-[#668589]"
+                >
+                    Вернуться на главную
+                    <MoveRight strokeWidth={1.5} className="h-5 w-5 transition-transform duration-200 group-hover:translate-x-1" aria-hidden="true" />
+                </button>
             </div>
         </main>
     );

@@ -13,9 +13,9 @@ type Props = {
 }
 
 export function ListCard({ currentIndex, list }: Props) {
-    const { data: session } = useSession()
+    const { data: session, status } = useSession()
 
-    const { profileCards, error, loading } = useGetProfileCards(session?.user.id)
+    const { profileCards, error, loading } = useGetProfileCards(session ? session.user.id : '000')
 
     /*  if (loading) return <ClipLoaderUI />
      if (!profileCards) return */
@@ -29,7 +29,7 @@ export function ListCard({ currentIndex, list }: Props) {
                         'flex-[0_0_370px] transition-all duration-500',
                         isActive ? 'scale-100 opacity-100' : 'scale-95 opacity-50',
                     )}>
-                        <Card obj={profile} />
+                        <Card obj={profile} status={status} myId={session ? session.user.id : '000'} />
                     </div>
                 )
             })}
