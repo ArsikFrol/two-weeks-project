@@ -2,6 +2,8 @@ import { Roboto } from "next/font/google";
 
 import type { Metadata } from "next";
 import "./globals.css";
+import { Header } from "@/components/Header/Header";
+import { Provider } from "@/components/Provider";
 
 const robotoFont = Roboto({
     variable: "--font-roboto",
@@ -10,13 +12,20 @@ const robotoFont = Roboto({
 });
 
 export const metadata: Metadata = {
-    title: 'Week Project'
+    title: 'TET-A-TET'
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
     return (
         <html className={robotoFont.variable}>
-            <body>{children}</body>
+            <body>
+                <Provider>
+                    <>
+                        <Header />
+                        {children}
+                    </>
+                </Provider>
+            </body>
         </html>
     );
 }
