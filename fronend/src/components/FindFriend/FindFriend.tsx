@@ -15,7 +15,7 @@ const list: ProfileCard[] = [
         name: 'Арсений',
         userName: 'arsikFrol',
         age: 18,
-        profileId: '',
+        profileId: '1',
         favourites: false
     },
     {
@@ -24,7 +24,7 @@ const list: ProfileCard[] = [
         name: 'Арсений',
         userName: 'arsikFrol',
         age: 18,
-        profileId: '',
+        profileId: '2',
         favourites: false
     },
     {
@@ -33,7 +33,7 @@ const list: ProfileCard[] = [
         name: 'Арсений',
         userName: 'arsikFrol',
         age: 18,
-        profileId: '',
+        profileId: '3',
         favourites: true
     },
     {
@@ -42,7 +42,7 @@ const list: ProfileCard[] = [
         name: 'Арсений',
         userName: 'arsikFrol',
         age: 18,
-        profileId: '',
+        profileId: '4',
         favourites: true
     },
     {
@@ -51,7 +51,7 @@ const list: ProfileCard[] = [
         name: 'Арсений',
         userName: 'arsikFrol',
         age: 18,
-        profileId: '',
+        profileId: '5',
         favourites: true
     },
     {
@@ -60,7 +60,7 @@ const list: ProfileCard[] = [
         name: 'Арсений',
         userName: 'arsikFrol',
         age: 18,
-        profileId: '',
+        profileId: '6',
         favourites: true
     },
     {
@@ -69,7 +69,7 @@ const list: ProfileCard[] = [
         name: 'Арсений',
         userName: 'arsikFrol',
         age: 18,
-        profileId: '',
+        profileId: '7',
         favourites: false
     },
     {
@@ -78,7 +78,7 @@ const list: ProfileCard[] = [
         name: 'Арсений',
         userName: 'arsikFrol',
         age: 18,
-        profileId: '',
+        profileId: '8',
         favourites: false
     },
     {
@@ -87,7 +87,7 @@ const list: ProfileCard[] = [
         name: 'Арсений',
         userName: 'arsikFrol',
         age: 18,
-        profileId: '',
+        profileId: '9',
         favourites: true
     },
     {
@@ -96,7 +96,7 @@ const list: ProfileCard[] = [
         name: 'Арсений',
         userName: 'arsikFrol',
         age: 18,
-        profileId: '',
+        profileId: '10',
         favourites: false
     },
     {
@@ -105,7 +105,7 @@ const list: ProfileCard[] = [
         name: 'Арсений',
         userName: 'arsikFrol',
         age: 18,
-        profileId: '',
+        profileId: '11',
         favourites: true
     },
     {
@@ -114,7 +114,7 @@ const list: ProfileCard[] = [
         name: 'Арсений',
         userName: 'arsikFrol',
         age: 18,
-        profileId: '',
+        profileId: '12',
         favourites: false
     },
     {
@@ -123,7 +123,7 @@ const list: ProfileCard[] = [
         name: 'Арсений',
         userName: 'arsikFrol',
         age: 18,
-        profileId: '',
+        profileId: '13',
         favourites: true
     },
     {
@@ -132,7 +132,7 @@ const list: ProfileCard[] = [
         name: 'Арсений',
         userName: 'arsikFrol',
         age: 18,
-        profileId: '',
+        profileId: '14',
         favourites: false
     },
     {
@@ -141,7 +141,7 @@ const list: ProfileCard[] = [
         name: 'Арсений',
         userName: 'arsikFrol',
         age: 18,
-        profileId: '',
+        profileId: '15',
         favourites: false
     },
     {
@@ -150,7 +150,7 @@ const list: ProfileCard[] = [
         name: 'Арсений',
         userName: 'arsikFrol',
         age: 18,
-        profileId: '',
+        profileId: '16',
         favourites: true
     }
 ]

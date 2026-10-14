@@ -6,20 +6,29 @@ import { useState } from "react"
 import { cn } from "@/lib/utils"
 import { ProfileCard } from "@/types/profileCard"
 import { useTypedRouter } from "@/hooks/useTypedRouter"
-import { postFavorites } from "@/api/favorites"
+import { postFavoritesToogle } from "@/api/favorites"
 
 type Props = {
     obj: ProfileCard,
     status: "authenticated" | "loading" | "unauthenticated",
-    myId: string
+    myId: string,
+
+    myCard?: boolean
 }
 
-export function Card({ obj, status, myId }: Props) {
+export function Card({ obj, status, myId, myCard = false }: Props) {
     const router = useTypedRouter()
 
     const [isFavorites, setIsFavorites] = useState<boolean>(obj.favourites)
 
     const clickStar = async () => {
+        if (!myCard) {
+            setIsFavorites(!isFavorites)
+            return
+        }
+
+        if (status === 'loading') return
+
         if (status === 'unauthenticated') {
             router.push('/signUp')
             return
@@ -27,12 +36,11 @@ export function Card({ obj, status, myId }: Props) {
 
         try {
 
-            const data = await postFavorites(myId, obj.profileId)
-
-            if (typeof data.data.isFavorite === 'boolean') setIsFavorites(data.data.isFavorite)
+            const newFavorite = await postFavoritesToogle(myId, obj.profileId)
+            setIsFavorites(newFavorite)
 
         } catch (error) {
-
+            console.error(error)
         }
     }
 

@@ -72,7 +72,7 @@ export function Edit({ obj, setObj, editProfileState, setEditProfile }: Props) {
                     <div className='text-[30px] font-light text-center'>change description:</div>
                     <textarea {...register('description')} placeholder={editProfileState.description} rows={2}
                         className={cn(
-                            'w-full border border-gray-400 rounded-2xl p-[20px] mt-[20px]',
+                            'w-full border border-gray-400 rounded-2xl p-[20px] mt-[10px]',
                             'focus:outline-0 focus:shadow transition-[box-shadow] duration-300'
                         )} />
                 </div>

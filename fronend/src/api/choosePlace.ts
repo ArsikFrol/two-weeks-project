@@ -1,8 +1,9 @@
 import { PlaceFormSchema } from "@/lib/schemas"
 import { api } from "./client"
+import { Place } from "@/types/place"
 
-export const postChoosePlace = async (body: PlaceFormSchema): Promise<number> => {
-    const { data } = await api.post<{ status: number }>('/choosePlace', body)
+export const postChoosePlace = async (body: PlaceFormSchema): Promise<Place[]> => {
+    const { data } = await api.post<{ data: Place[] }>('/choosePlace', body)
 
-    return data.status
+    return data.data
 }

@@ -14,7 +14,12 @@ import { City } from "./City/City"
 import { TypeMeeting } from "./TypeMeeting/TypeMeeting"
 import { postChoosePlace } from "@/api/choosePlace"
 
-export function Form() {
+type Props = {
+    setShowModal: (value: boolean) => void,
+    setData: (value: PlaceFormSchema) => void
+}
+
+export function Form({ setData, setShowModal }: Props) {
     const {
         handleSubmit,
         formState,
@@ -25,16 +30,8 @@ export function Form() {
     const onSubmit = async (data: PlaceFormSchema) => {
         console.log('Валидные данные:', data)
 
-        try {
-
-            const status = await postChoosePlace(data)
-            console.log(status)
-
-            reset()
-        } catch (error) {
-            console.log(`Ошибка: ${error}`)
-        }
-
+        setData(data)
+        setShowModal(true)
     }
 
     return (

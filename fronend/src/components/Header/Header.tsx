@@ -7,6 +7,7 @@ import { ElemNav } from "./ElemNav"
 import { Logo } from "./Logo"
 import { TypeRoutes, useTypedRouter } from "@/hooks/useTypedRouter"
 import { Profile } from "./Profile"
+import { cn } from "@/lib/utils"
 
 export type Nav = {
     id: number,
@@ -17,8 +18,7 @@ export type Nav = {
 const listNav: Nav[] = [
     { id: 1, text: 'Find a friend', link: '/findFriend' },
     { id: 2, text: 'Choose a place', link: '/choosePlace' },
-    { id: 3, text: 'T-A-T', link: '/T-A-T' },
-    { id: 4, text: 'Messanger', link: '/messager' },
+    { id: 3, text: 'Messanger', link: '/messager' },
 ]
 
 export function Header() {
@@ -31,7 +31,10 @@ export function Header() {
 
     return (
         <div className="flex justify-between bg-[rgba(233,235,214,1)] py-[15px]">
-            <div className='w-[1540px] mx-auto flex justify-between'>
+            <div className={cn(
+                'mx-auto flex justify-between',
+                '2xl:w-[1500px] xl:w-[1200px]'
+            )}>
                 <Logo />
                 <div className='flex items-center'>
                     {

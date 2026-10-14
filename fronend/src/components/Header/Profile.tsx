@@ -19,7 +19,7 @@ type ElemMenu = {
 
 const menu: ElemMenu[] = [
     { link: '/profile/settings', text: 'Настройки' },
-    { link: '/profile/editing', text: 'Редактирование' },
+    { link: '/profile/editing', text: 'Редактирование карточки' },
     { link: '/', text: 'Выйти' }
 ]
 
@@ -31,14 +31,16 @@ export function Profile({ page }: Props) {
 
     const ref = useRef<HTMLDivElement>(null)
 
-    const clickElem = (link: TypeRoutes) => {
+    const clickElem = async (link: TypeRoutes) => {
         setShowMenu(false)
         if (status === 'loading') return
+
         if (link === '/') {
-            signOut()
-            router.push('/')
+            await signOut({ callbackUrl: '/' })
             return
-        } else router.push(link)
+        }
+
+        router.push(link)
     }
 
     useClickAway(ref, () => setShowMenu(false))
@@ -46,9 +48,7 @@ export function Profile({ page }: Props) {
     return (
         <div ref={ref} className={cn(
             'relative',
-            session
-                ? ''
-                : 'hidden'
+            status === 'unauthenticated' && 'hidden'
         )}>
             <div onClick={() => setShowMenu(true)} className={cn(
                 "px-[30px] py-[10px] flex items-center gap-x-[10px]",

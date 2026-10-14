@@ -1,21 +1,17 @@
 'use client'
 
-import { useTypedRouter } from "@/hooks/useTypedRouter"
-import { signUpForm, SignUpSchema } from "@/lib/schemas"
-import { cn } from "@/lib/utils"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { FieldError, useForm } from "react-hook-form"
-import { Error } from "../UI/Error"
-import { api } from "@/api/client"
-import { postAccount } from "@/api/registration"
 import { signIn } from "next-auth/react"
 import axios from "axios"
 
-type Props = {
+import { useTypedRouter } from "@/hooks/useTypedRouter"
+import { signUpForm, SignUpSchema } from "@/lib/schemas"
+import { cn } from "@/lib/utils"
+import { Error } from "../UI/Error"
+import { postAccount } from "@/api/registration"
 
-}
-
-export function Form(props: Props) {
+export function Form() {
     const router = useTypedRouter()
 
     const { register, handleSubmit, formState, reset, setError } = useForm<SignUpSchema>({

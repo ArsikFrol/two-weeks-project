@@ -1,13 +1,19 @@
 'use client'
 
-import { placeFormSchema, PlaceFormSchema } from "@/lib/schemas";
-import { Calendar } from "./Calendar/Calendar";
-import { Form } from "./Form/Form";
 import { FormProvider, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { useState } from "react";
+
+import { placeFormSchema, PlaceFormSchema } from "@/lib/schemas";
+import { Form } from "./Form/Form";
+import { Modal } from "./Modal/Modal";
+import { Calendar } from "./Calendar";
 
 
 export function ChoosePlace() {
+
+    const [data, setData] = useState<PlaceFormSchema>()
+    const [showModal, setShowModal] = useState<boolean>(false)
 
     const methods = useForm<PlaceFormSchema>({
         resolver: zodResolver(placeFormSchema),
@@ -23,16 +29,21 @@ export function ChoosePlace() {
             time: '',
             atmosphere: '',
             person: '',
-            metting: '',
+            meeting: '',
         },
     })
 
     return (
-        <FormProvider {...methods}>
-            <div className="w-[1580px] mx-auto grid grid-cols-2 gap-x-[50px]">
-                <Form />
-                <Calendar />
-            </div>
-        </FormProvider>
+        <>
+            <FormProvider {...methods}>
+                <div className="w-[1580px] mx-auto grid grid-cols-2 gap-x-[50px]">
+                    <Form setData={setData} setShowModal={setShowModal} />
+                    <Calendar />
+                </div>
+            </FormProvider>
+            {showModal &&
+                <Modal data={data!} setShowModal={setShowModal} />
+            }
+        </>
     )
 }

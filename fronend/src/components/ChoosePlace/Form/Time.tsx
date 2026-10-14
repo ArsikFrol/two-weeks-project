@@ -3,10 +3,9 @@
 import { ChevronDown, ChevronUp, X } from "lucide-react"
 import { useRef, useState } from "react"
 import { useClickAway } from "react-use"
-import { FormState, useFormContext } from "react-hook-form"
+import { useFormContext } from "react-hook-form"
 
 import { cn } from "@/lib/utils"
-import { Filter } from "@/store/Filter/types"
 import { PlaceFormSchema } from "@/lib/schemas"
 
 type Props = {

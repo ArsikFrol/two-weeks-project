@@ -9,6 +9,7 @@ export type TypeRoutes =
     | '/profile/settings'
     | '/profile/editing'
     | '/choosePlace'
+    | '/choosePlace/cards'
     | '/findFriend'
     | '/T-A-T'
     | '/messager'
