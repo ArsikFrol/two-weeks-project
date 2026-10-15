@@ -26,7 +26,8 @@ export default function Carousel({ images, interval = 3000 }: Props) {
             <div className="flex">
                 {images.map((img, i) => (
                     <div key={i} className="flex-[0_0_100%] min-w-0">
-                        <Image src={place} alt="" draggable="false" className="w-[500px] h-[300px] object-cover rounded-2xl" />
+                        <Image unoptimized src={img} alt="" draggable="false" width={500}
+                            height={500} className="w-[500px] h-[300px] object-cover rounded-2xl" />
                     </div>
                 ))}
             </div>

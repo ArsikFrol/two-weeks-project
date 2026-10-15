@@ -1,13 +1,12 @@
 'use client'
 
-import { Control, FormState, useFormContext, UseFormSetValue, UseFormWatch } from "react-hook-form"
+import { useFormContext } from "react-hook-form"
 import { useRef, useState } from "react"
 import { useClickAway } from "react-use"
 
 import { Input } from "@/components/UI/Input"
 import { PlaceFormSchema } from "@/lib/schemas"
 import { cn } from "@/lib/utils"
-import { Filter } from "@/store/Filter/types"
 import { ListCities } from "./ListCities"
 
 type Props = {
@@ -15,7 +14,7 @@ type Props = {
 }
 
 export function City({ }: Props) {
-    const { watch, setValue, control, formState } = useFormContext<PlaceFormSchema>()
+    const { watch, setValue, control } = useFormContext<PlaceFormSchema>()
 
     const [showCities, setShowCities] = useState<boolean>(false)
 

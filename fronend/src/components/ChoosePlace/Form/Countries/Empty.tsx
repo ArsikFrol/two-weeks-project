@@ -4,7 +4,7 @@ type Props = {
 
 export function Empty(props: Props) {
     return (
-        <div className="flex h-full items-center justify-center text-[25px]">
+        <div className="h-[160px] flex items-center justify-center text-[25px] text-white">
             Список пуст
         </div>
     )

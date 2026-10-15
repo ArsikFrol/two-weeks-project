@@ -8,10 +8,10 @@ import { ListCountry } from "./ListCountry"
 import { cn } from "@/lib/utils"
 
 type Props = {
-
+    setcityAndCountry: (value: any) => void
 }
 
-export function Country({ }: Props) {
+export function Country({ setcityAndCountry }: Props) {
     const { setValue, control } = useFormContext<PlaceFormSchema>()
 
     const [showCountries, setShowCountries] = useState<boolean>(false)

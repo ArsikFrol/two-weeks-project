@@ -22,8 +22,9 @@ export function Card({ obj, status, myId, myCard = false }: Props) {
     const [isFavorites, setIsFavorites] = useState<boolean>(obj.favourites)
 
     const clickStar = async () => {
-        if (!myCard) {
+        if (myCard) {
             setIsFavorites(!isFavorites)
+            console.log('sdf')
             return
         }
 

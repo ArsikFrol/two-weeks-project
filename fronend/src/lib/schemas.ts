@@ -82,6 +82,7 @@ export const placeFormSchema = z.object({
             /^[А-ЯЁа-яёA-Za-z]+([ -][А-ЯЁа-яёA-Za-z]+)*$/,
             'Название может содержать только буквы, пробел и дефис'
         ),
+    countrySlug: z.string(),
 
     city: z.string()
         .trim()
@@ -92,6 +93,7 @@ export const placeFormSchema = z.object({
             /^[А-ЯЁа-яёA-Za-z]+([ -][А-ЯЁа-яёA-Za-z]+)*$/,
             'Название может содержать только буквы, пробел и дефис'
         ),
+    citySlug: z.string(),
 
     min: z
         .number({ message: 'Введите число' })

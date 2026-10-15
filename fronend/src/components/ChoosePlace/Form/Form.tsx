@@ -13,6 +13,7 @@ import { Country } from "./Countries/Country"
 import { City } from "./City/City"
 import { TypeMeeting } from "./TypeMeeting/TypeMeeting"
 import { postChoosePlace } from "@/api/choosePlace"
+import { useState } from "react"
 
 type Props = {
     setShowModal: (value: boolean) => void,
@@ -20,6 +21,8 @@ type Props = {
 }
 
 export function Form({ setData, setShowModal }: Props) {
+    const [cityAndCountry, setcityAndCountry] = useState<{ city: string, country: string }>()
+
     const {
         handleSubmit,
         formState,
@@ -46,7 +49,7 @@ export function Form({ setData, setShowModal }: Props) {
                     width={280} onClick={() => { }} flexCol onCliclX={() => { }} />
             </div>
             <Time />
-            <Country />
+            <Country setcityAndCountry={setcityAndCountry} />
             <City />
             <Budget />
             <Atmosphere />
