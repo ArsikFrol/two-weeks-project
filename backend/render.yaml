@@ -1,17 +1,14 @@
-# Blueprint для автодеплоя TET-a-TET на Render (render.com).
-# Необязательный файл: можно создать сервис и через сайт Render,
-# но с ним достаточно нажать "New -> Blueprint" и выбрать репозиторий.
 services:
   - type: web
-    name: tet-a-tet-api          # имя сервиса = часть ссылки tet-a-tet-api.onrender.com
+    name: tet-a-tet-api          
     runtime: python
-    plan: free                   # бесплатный план (засыпает после 15 минут простоя)
+    plan: free                   
     buildCommand: "pip install -r requirements.txt"
     startCommand: "uvicorn main:app --host 0.0.0.0 --port $PORT"
     envVars:
-      - key: OPENROUTER_API_KEY  # вставить свой ключ в панели Render
+      - key: OPENROUTER_API_KEY  
         sync: false
-      - key: GOOGLE_API_KEY      # вставить свой ключ в панели Render
+      - key: GOOGLE_API_KEY      
         sync: false
       - key: OPENROUTER_MODEL
-        value: openrouter/free   # бесплатный роутер OpenRouter
+        value: openrouter/free   
