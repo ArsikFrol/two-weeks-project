@@ -1100,7 +1100,7 @@ HOME_HTML = """<!DOCTYPE html>
             <span class="chip">Арсений</span>
             <span class="chip">Ника</span>
             <span class="chip">Кира</span>
-            <span class="chip">Настя</span>
+            <span class="chip">Данил</span>
         </div>
 
         <h2>Технологии</h2>
