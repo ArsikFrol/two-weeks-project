@@ -1,4 +1,40 @@
+# -*- coding: utf-8 -*-
+# ============================================================
+#  TET-a-TET — «Генератор мест и тем для встреч»
+#  Бэкенд в одном файле:
+#  FastAPI + SQLAlchemy + SQLite + OpenRouter (ИИ) + Google Places
+#
+#  Как запустить:
+#    1) pip install fastapi "uvicorn[standard]" sqlalchemy requests
+#    2) python main.py
+#    3) Главная страница: http://127.0.0.1:8000/
+#       Документация API: http://127.0.0.1:8000/docs
+#
+#  Эндпоинты:
+#    GET  /                      — HTML-визитка проекта
+#    GET  /api/countries         — справочник стран (?search=, ?slug=)
+#    GET  /api/cities            — справочник городов (?countryId=,
+#                                  ?countrySlug=, ?slug=, ?search=)
+#    POST /api/generate          — подбор 3 мест + 4 тем (3 уровня страховки)
+#    POST /api/auth/registration — создание аккаунта
+#    POST /api/auth/login        — вход (проверка email и пароля)
+#    GET  /api/profileCard       — карточки всех пользователей
+#
+#  Переменные окружения (все НЕобязательны — без них работает заглушка):
+#    OPENROUTER_API_KEY  — ключ с https://openrouter.ai/keys (ИИ)
+#    GOOGLE_API_KEY      — ключ Google Places (настоящие места)
+#    OPENROUTER_MODEL    — модель ИИ (по умолчанию "openrouter/free")
+#
+#  Тестовые пользователи после первого запуска (пароль у всех "1234"):
+#    ivan@example.com, anna@example.com, kira@example.com,
+#    arseniy@example.com
+#
+#  ГЛАВНАЯ ГАРАНТИЯ: /api/generate ВСЕГДА возвращает 200 OK с местами
+#  и темами; auth-эндпоинты всегда отвечают 200 OK со полем success.
+# ============================================================
+
 import hashlib
+import hmac
 import json
 import os
 import random
@@ -12,6 +48,11 @@ from pydantic import AliasChoices, BaseModel, Field, field_validator, model_vali
 from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, create_engine
 from sqlalchemy.orm import Session, declarative_base, relationship, sessionmaker
 
+# ============================================================
+# 1. БАЗА ДАННЫХ (SQLite — файл places_v4.db появится рядом со скриптом).
+#     v4 — добавлены таблицы пользователей; новый файл гарантирует,
+#     что все колонки создадутся с нуля без конфликтов со старыми базами.
+# ============================================================
 
 DATABASE_URL = "sqlite:///./places_v4.db"
 
@@ -26,6 +67,12 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 
+# ============================================================
+# 2. МОДЕЛИ (описание таблиц базы данных).
+#     Внутри базы поля в snake_case (count_places) — это внутреннее
+#     дело бэкенда. Наружу (фронтенду) отдаём camelCase через
+#     DTO-схемы из секции 4.
+# ============================================================
 
 class Country(Base):
     """Страна. id — короткий код: 'ru', 'kz', 'uz', 'by', 'tr', 'ge'.
@@ -85,11 +132,18 @@ class UserProfile(Base):
     user = relationship("User", back_populates="profile")
 
 
+# ============================================================
+# 3. НАЧАЛЬНОЕ ЗАПОЛНЕНИЕ БАЗЫ (SEED)
+# ============================================================
+
 def hash_password(password: str) -> str:
     """Превращает пароль в хэш: из хэша нельзя восстановить пароль,
-    но можно проверить, что введённый пароль совпадает сoriginal.
+    но можно проверить, что введённый пароль совпадает с оригиналом.
     Для учебного проекта соль фиксированная; в настоящем продакшене
     используют уникальную соль на пользователя и библиотеку bcrypt."""
+    # str(value) на всякий случай: если фронт прислал пароль числом
+    # (1234 без кавычек), сначала превращаем его в строку "1234".
+    password = str(password)
     return hashlib.pbkdf2_hmac(
         "sha256", password.encode("utf-8"), b"tet-a-tet-static-salt", 100_000
     ).hex()
@@ -151,7 +205,8 @@ def seed_database() -> None:
                 db.add(City(id=city_id, name=city_name, slug=city_slug,
                             count_places=places, country_id=country_id))
 
-       
+        # Тестовые профили, чтобы фронтенд сразу видел карточки.
+        # Пароль у всех — "1234".
         test_users = [
             ("ivan@example.com", "Иван", 25, "ivan_traveler",
              "Люблю кофейни, долгие прогулки и настолки. Ищу компанию на выходные.",
@@ -180,9 +235,25 @@ def seed_database() -> None:
         db.close()
 
 
-seed_database()  
+seed_database()  # выполняется сразу при запуске файла
 
 
+# ============================================================
+# 4. PYDANTIC-СХЕМЫ (DTO — формат запросов и ответов API).
+#
+#    СТРОГИЕ ПРАВИЛА НЕЙМИНГА (по код-ревью):
+#      входящие запросы верхнего уровня  -> ...Request  (GenerateRequest)
+#      ответы сервера верхнего уровня    -> ...Response (CountriesResponse)
+#      вложенные объекты в ответах       -> ...Out      (CountryOut, PlaceOut)
+#      вложенные объекты в запросах      -> ...In       (появятся, когда
+#        какой-то запрос станет сложным и потребует вложенности)
+#
+#    Все поля DTO — в camelCase (countryId, countPlaces, timeOfDay,
+#    photoProfile), чтобы фронтенду на Next.js не приходилось
+#    ничего конвертировать.
+# ============================================================
+
+# --- Справочники: страны и города ---
 
 class CountryOut(BaseModel):
     """Страна (вложенный объект ответа)."""
@@ -327,6 +398,13 @@ class RegistrationRequest(BaseModel):
     def normalize_email(cls, value):
         return lower_text(value)
 
+    @field_validator("password", mode="before")
+    @classmethod
+    def normalize_password(cls, value):
+        """Пароль числом (1234) превращаем в строку "1234" — тогда хэш
+        при регистрации совпадёт с хэшем при входе."""
+        return str(value) if value is not None else ""
+
     @field_validator("age", mode="before")
     @classmethod
     def age_accepts_string(cls, value):
@@ -356,6 +434,15 @@ class LoginRequest(BaseModel):
     @classmethod
     def normalize_email(cls, value):
         return lower_text(value)
+
+    @field_validator("password", mode="before")
+    @classmethod
+    def normalize_password(cls, value):
+        """Пароль может прийти числом (1234 без кавычек) — приводим к строке,
+        иначе Pydantic вернёт 422 и фронт не поймёт, что произошло."""
+        if value is None:
+            return ""
+        return str(value)
 
 
 class AuthResponse(BaseModel):
@@ -471,6 +558,10 @@ def ru_tag(translation: dict, value) -> str:
     return translation.get(text.lower(), text)
 
 
+# ============================================================
+# 5. ПРИЛОЖЕНИЕ FASTAPI + CORS
+# ============================================================
+
 app = FastAPI(
     title="TET-a-TET API",
     description="Генератор мест и тем для встреч",
@@ -496,6 +587,12 @@ def get_db():
         db.close()
 
 
+# ============================================================
+# 6. ЛОКАЛЬНАЯ ЗАГЛУШКА PLACES_LIBRARY (уровень страховки №3).
+#     Это запасной источник данных: работает БЕЗ интернета, БЕЗ ключей
+#     и БЕЗ денег. Сюда бэкенд падает при ЛЮБОЙ проблеме с внешними
+#     API — поэтому пользователь гарантированно получает результат.
+# ============================================================
 
 # Слова для подстановки времени суток в описания мест
 TIME_WORDS = {
@@ -620,6 +717,10 @@ def pick_places(atmosphere: list[str], city_name: str, time_of_day: str) -> list
     ]
 
 
+# Подсказки по атмосфере для каждого формата встречи (теги из макета).
+# Если пользователь не выбрал атмосферу вручную, бэкенд сам понимает,
+# какие места подходят: "Деловая встреча" -> формальная, "Свидание" ->
+# романтическая и т.д. Работает и для заглушки, и для поиска Google.
 MEETING_TYPE_HINTS = {
     "Свидание": ["романтическая", "уютная"],
     "Свидание вслепую": ["романтическая", "веселая"],
@@ -642,7 +743,7 @@ MEETING_TYPE_HINTS = {
     "Тренинг": ["активная", "веселая"],
 }
 
-
+# Одна готовая тема разговора для самых частых форматов встречи
 MEETING_TYPE_TOPICS = {
     "Деловая встреча": "Какие цели у встречи и какой результат нужен каждому?",
     "Собеседование": "Почему вам интересна эта роль и эта команда?",
@@ -709,6 +810,23 @@ def make_topics(notes: str, atmosphere: list[str],
     return topics[:4]
 
 
+# ============================================================
+# 7. ВНЕШНИЕ СЕРВИСЫ И СТРАХОВКА ОТ ПАДЕНИЙ.
+#
+#    Уровни источников мест и тем (от лучшего к запасному):
+#
+#      Уровень 1: OpenRouter (ИИ)        — нужны OPENROUTER_API_KEY и интернет
+#      Уровень 2: Google Places          — нужны GOOGLE_API_KEY и интернет
+#      Уровень 3: заглушка PLACES_LIBRARY — работает всегда
+#
+#    КАК РАБОТАЕТ СТРАХОВКА: каждая функция внешнего сервиса возвращает
+#    None вместо исключения, если ключ не задан, сеть недоступна,
+#    ключ не принят или ответ не по формату. Эндпоинт /api/generate
+#    просто переходит на следующий уровень. Ошибки 500 не бывает:
+#    пользователь всегда получает 200 OK с местами и темами.
+# ============================================================
+
+# --- OpenRouter (ИИ) ---
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
@@ -936,6 +1054,9 @@ def get_places_from_google(city_name: str, atmosphere: list[str]) -> Optional[li
     return result
 
 
+# ============================================================
+# 8. ГЛАВНАЯ СТРАНИЦА (HTML-визитка проекта)
+# ============================================================
 
 HOME_HTML = """<!DOCTYPE html>
 <html lang="ru">
@@ -1027,6 +1148,9 @@ def home():
     return HOME_HTML
 
 
+# ============================================================
+# 9. ЭНДПОИНТЫ API
+# ============================================================
 
 @app.get("/api/countries", response_model=CountriesResponse)
 def get_countries(search: Optional[str] = None, slug: Optional[str] = None,
@@ -1123,16 +1247,28 @@ def registration(request: RegistrationRequest, db: Session = Depends(get_db)):
 
 @app.post("/api/auth/login", response_model=AuthResponse)
 def login(request: LoginRequest, db: Session = Depends(get_db)):
-    """Проверяет email и пароль. Всегда 200 OK — смотри поле success:
+    """Вход по email и паролю. Всегда 200 OK — смотри поле success:
     True = вход выполнен (в profileId — номер профиля пользователя),
-    False = неверный email или пароль."""
+    False = неверный email или пароль.
+
+    Строгая последовательность проверки (по ТЗ):
+    1) ищем пользователя по email в таблице User;
+    2) если не нашли ИЛИ хэш введённого пароля не совпал с хэшем из
+       базы — отказ «Неверный email или пароль»;
+    3) только при совпадении — success=True.
+    """
+    # Шаг 1: ищем пользователя по email
     user = db.query(User).filter(User.email == request.email).first()
 
-    # Один и тот же текст ошибки для «нет такого email» и «неверный пароль» —
-    # так злоумышленник не узнает, какие email зарегистрированы.
-    if user is None or user.password_hash != hash_password(request.password):
+    # Шаг 2: строгая проверка пароля.
+    # hmac.compare_digest — специальное «постоянное по времени» сравнение
+    # строк: защищает от timing-атак (взлома по скорости ответа сервера).
+    if user is None:
+        return AuthResponse(success=False, message="Неверный email или пароль")
+    if not hmac.compare_digest(user.password_hash, hash_password(request.password)):
         return AuthResponse(success=False, message="Неверный email или пароль")
 
+    # Шаг 3: пароли совпали — впускаем
     profile_id = user.profile.profile_id if user.profile else None
     return AuthResponse(success=True, message="Вход выполнен", profileId=profile_id)
 
@@ -1191,7 +1327,9 @@ def generate(request: GenerateRequest):
     )
 
 
-
+# ============================================================
+# 10. ЗАПУСК СЕРВЕРА: python main.py
+# ============================================================
 if __name__ == "__main__":
     import uvicorn
 
