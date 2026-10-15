@@ -1,0 +1,9 @@
+@import "tailwindcss";
+
+@theme inline {
+    --font-sans: var(--font-roboto), sans-serif;
+}
+
+::-webkit-scrollbar {
+    width: 0;
+}
