@@ -1,38 +1,3 @@
-# -*- coding: utf-8 -*-
-# ============================================================
-#  TET-a-TET — «Генератор мест и тем для встреч»
-#  Бэкенд в одном файле:
-#  FastAPI + SQLAlchemy + SQLite + OpenRouter (ИИ) + Google Places
-#
-#  Как запустить:
-#    1) pip install fastapi "uvicorn[standard]" sqlalchemy requests
-#    2) python main.py
-#    3) Главная страница: http://127.0.0.1:8000/
-#       Документация API: http://127.0.0.1:8000/docs
-#
-#  Эндпоинты:
-#    GET  /                      — HTML-визитка проекта
-#    GET  /api/countries         — справочник стран (?search=, ?slug=)
-#    GET  /api/cities            — справочник городов (?countryId=,
-#                                  ?countrySlug=, ?slug=, ?search=)
-#    POST /api/generate          — подбор 3 мест + 4 тем (3 уровня страховки)
-#    POST /api/auth/registration — создание аккаунта
-#    POST /api/auth/login        — вход (проверка email и пароля)
-#    GET  /api/profileCard       — карточки всех пользователей
-#
-#  Переменные окружения (все НЕобязательны — без них работает заглушка):
-#    OPENROUTER_API_KEY  — ключ с https://openrouter.ai/keys (ИИ)
-#    GOOGLE_API_KEY      — ключ Google Places (настоящие места)
-#    OPENROUTER_MODEL    — модель ИИ (по умолчанию "openrouter/free")
-#
-#  Тестовые пользователи после первого запуска (пароль у всех "1234"):
-#    ivan@example.com, anna@example.com, kira@example.com,
-#    arseniy@example.com
-#
-#  ГЛАВНАЯ ГАРАНТИЯ: /api/generate ВСЕГДА возвращает 200 OK с местами
-#  и темами; auth-эндпоинты всегда отвечают 200 OK со полем success.
-# ============================================================
-
 import hashlib
 import json
 import os
