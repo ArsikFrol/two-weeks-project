@@ -1081,29 +1081,31 @@ def get_countries(search: Optional[str] = None, slug: Optional[str] = None,
 def get_cities(countryId: Optional[str] = None, countrySlug: Optional[str] = None,
                slug: Optional[str] = None, search: Optional[str] = None,
                db: Session = Depends(get_db)):
-    """Список городов. Параметры (можно использовать вместе или по отдельности):
-    ?countryId=ru — города одной страны по её коду;
-    ?countrySlug=russia — города страны по её слагу;
-    ?slug=moscow — один город по своему слагу;
-    ?search=моск — регистронезависимый поиск по названию города."""
+    """Список городов с железобетонной фильтрацией."""
     query = db.query(City)
 
-    # Точные совпадения кодов и слагов — фильтруем прямо в SQL
     if countryId:
         query = query.filter(City.country_id == countryId)
+    
+    # Если фронт прислал countrySlug или слаг равен названию страны (например, "uzbekistan")
     if countrySlug:
-        # соединяем таблицы: город -> его страна -> слаг страны
         query = query.join(Country).filter(Country.slug == countrySlug.lower())
-    if slug:
-        query = query.filter(City.slug == slug.lower())
+    elif slug:
+        slug_lower = slug.lower()
+        # Проверяем: это слаг страны (например, "uzbekistan" или "russia")?
+        country_match = db.query(Country).filter(Country.slug == slug_lower).first()
+        if country_match:
+            query = query.join(Country).filter(Country.slug == slug_lower)
+        else:
+            # Иначе ищем как слаг конкретного города (например, "moscow")
+            query = query.filter(City.slug == slug_lower)
 
-    cities = query.all()
-
-    # Поиск по названию — на Python (см. комментарий в /api/countries)
     if search:
         search_lower = search.lower()
-        cities = [c for c in cities if search_lower in c.name.lower()]
+        cities = [c for c in db.query(City).all() if search_lower in c.name.lower()]
+        return {"data": [to_city_out(c) for c in cities]}
 
+    cities = query.all()
     return {"data": [to_city_out(c) for c in cities]}
 
 
